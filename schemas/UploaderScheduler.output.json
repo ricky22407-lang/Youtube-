@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UploaderScheduler Output",
+  "type": "object",
+  "properties": {
+    "platform": { "type": "string", "const": "youtube" },
+    "video_id": { "type": "string" },
+    "platform_url": { "type": "string", "format": "uri" },
+    "status": { "type": "string", "enum": ["uploaded", "scheduled", "failed"] },
+    "scheduled_for": { "type": "string", "format": "date-time" },
+    "uploaded_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["platform", "video_id", "platform_url", "status", "uploaded_at"]
+}

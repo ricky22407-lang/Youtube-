@@ -57,6 +57,26 @@ export interface VideoAsset {
   generated_at: string;
 }
 
+export interface ScheduleConfig {
+  publish_at?: string; // ISO Date string for scheduled release
+  privacy_status: 'private' | 'public' | 'unlisted';
+}
+
+export interface UploaderInput {
+  video_asset: VideoAsset;
+  metadata: PromptOutput;
+  schedule: ScheduleConfig;
+}
+
+export interface UploadResult {
+  platform: 'youtube';
+  video_id: string;
+  platform_url: string;
+  status: 'uploaded' | 'scheduled' | 'failed';
+  scheduled_for?: string;
+  uploaded_at: string;
+}
+
 // Module Interfaces
 export interface IModule<Input, Output> {
   name: string;

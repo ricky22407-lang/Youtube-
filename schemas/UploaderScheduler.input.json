@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UploaderScheduler Input",
+  "type": "object",
+  "properties": {
+    "video_asset": {
+      "type": "object",
+      "properties": {
+        "candidate_id": { "type": "string" },
+        "video_url": { "type": "string" },
+        "status": { "type": "string", "const": "generated" }
+      },
+      "required": ["candidate_id", "video_url", "status"]
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "title_template": { "type": "string" },
+        "description_template": { "type": "string" }
+      },
+      "required": ["title_template", "description_template"]
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "publish_at": { "type": "string", "format": "date-time" },
+        "privacy_status": { "type": "string", "enum": ["private", "public", "unlisted"] }
+      },
+      "required": ["privacy_status"]
+    }
+  },
+  "required": ["video_asset", "metadata", "schedule"]
+}

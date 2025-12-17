@@ -1,0 +1,20 @@
+{
+  "video_asset": {
+    "candidate_id": "gen_001",
+    "video_url": "blob:http://localhost:3000/video.mp4",
+    "mime_type": "video/mp4",
+    "status": "generated",
+    "generated_at": "2023-10-27T10:00:00.000Z"
+  },
+  "metadata": {
+    "candidate_id": "gen_001",
+    "prompt": "...",
+    "title_template": "Hydraulic Press vs Gummy Bears!",
+    "description_template": "#shorts #crush",
+    "candidate_reference": {}
+  },
+  "schedule": {
+    "privacy_status": "public",
+    "publish_at": "2023-10-28T12:00:00.000Z"
+  }
+}
