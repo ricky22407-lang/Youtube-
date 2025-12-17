@@ -1,10 +1,18 @@
 import { GoogleGenAI } from "@google/genai";
+import { Buffer } from 'buffer';
 
-// Ensure API Key is present
-// Note: In Next.js/Vercel, process.env.API_KEY is available on the server side.
-const API_KEY = process.env.API_KEY || '';
+// Safe access to process.env to prevent browser crashes if this file is bundled
+const getEnv = (key: string) => {
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key];
+  }
+  return '';
+};
 
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const API_KEY = getEnv('API_KEY');
+
+// Initialize conditionally to allow file to be imported without crashing
+const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
 
 const textModelId = "gemini-2.5-flash";
 const videoModelId = "veo-3.1-fast-generate-preview";
@@ -14,8 +22,8 @@ export const generateJSON = async <T>(
   systemInstruction: string,
   responseSchema?: any
 ): Promise<T> => {
-  if (!API_KEY) {
-    throw new Error("API Key is missing. Please check server configuration.");
+  if (!ai || !API_KEY) {
+    throw new Error("Server Error: API_KEY is missing. Please check Vercel environment variables.");
   }
 
   try {
@@ -43,8 +51,8 @@ export const generateJSON = async <T>(
 };
 
 export const generateVideo = async (prompt: string): Promise<string> => {
-  if (!API_KEY) {
-    throw new Error("API Key is missing.");
+  if (!ai || !API_KEY) {
+    throw new Error("Server Error: API_KEY is missing.");
   }
 
   try {
@@ -77,23 +85,15 @@ export const generateVideo = async (prompt: string): Promise<string> => {
       throw new Error(`Failed to download video bytes: ${response.statusText}`);
     }
 
-    // Convert to Base64 Data URI for frontend consumption
     const arrayBuffer = await response.arrayBuffer();
     
-    // Convert ArrayBuffer to Base64
-    // Safe implementation for environments where Buffer might not be globally typed (e.g. Frontend TS config)
+    // Server-side buffer handling
     let base64 = '';
-    if (typeof globalThis !== 'undefined' && (globalThis as any).Buffer) {
-        base64 = (globalThis as any).Buffer.from(arrayBuffer).toString('base64');
+    if (typeof Buffer !== 'undefined') {
+        base64 = Buffer.from(arrayBuffer).toString('base64');
     } else {
-        // Fallback using standard Web APIs
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        base64 = btoa(binary);
+        // Fallback or Error
+        throw new Error("Environment does not support Buffer (Client-side execution blocked).");
     }
     
     return `data:video/mp4;base64,${base64}`;

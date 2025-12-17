@@ -1,3 +1,4 @@
+
 // Domain Types
 
 export interface ShortsData {
@@ -123,6 +124,7 @@ export interface PipelineResult {
   logs: string[];
   videoUrl?: string;
   uploadId?: string;
+  error?: string;
 }
 
 export interface IModule<Input, Output> {

@@ -1,39 +1,83 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { 
   ChannelConfig, LogEntry, ChannelState, ScheduleConfig, PipelineResult, AuthCredentials 
 } from './types';
 import { MOCK_CHANNEL_STATE } from './constants';
 
-const App: React.FC = () => {
+// Error Boundary Component
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
+  public state = { hasError: false, error: null as Error | null };
+
+  constructor(props: {children: React.ReactNode}) {
+    super(props);
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center text-red-400 p-8 text-center">
+          <div>
+            <h1 className="text-3xl font-bold mb-4">系統發生錯誤 ⚠️</h1>
+            <p className="bg-slate-800 p-4 rounded text-left font-mono text-sm max-w-2xl overflow-auto">
+              {this.state.error?.message || "Unknown Error"}
+            </p>
+            <button 
+                onClick={() => window.location.reload()}
+                className="mt-6 px-6 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-500"
+            >
+                重新整理
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const AppContent: React.FC = () => {
   // --- State ---
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'logs'>('dashboard');
+  const [isLoading, setIsLoading] = useState(true);
 
   // New Channel Form State
   const [newChannelName, setNewChannelName] = useState("");
   const [newKeywords, setNewKeywords] = useState("AI, Tech");
   const [newRegion, setNewRegion] = useState("US");
 
-  // --- Persistence ---
+  // --- Persistence & Init ---
   useEffect(() => {
-    const saved = localStorage.getItem('sas_channels');
-    if (saved) setChannels(JSON.parse(saved));
+    try {
+        const saved = localStorage.getItem('sas_channels');
+        if (saved) setChannels(JSON.parse(saved));
 
-    // Handle OAuth Callback
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const pendingId = localStorage.getItem('sas_pending_auth_id');
+        // Handle OAuth Callback
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        const pendingId = localStorage.getItem('sas_pending_auth_id');
 
-    if (code && pendingId) {
-       handleAuthCallback(code, pendingId);
+        if (code && pendingId) {
+            handleAuthCallback(code, pendingId);
+        }
+    } catch (e) {
+        console.error("Init Error:", e);
+    } finally {
+        setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('sas_channels', JSON.stringify(channels));
-  }, [channels]);
+    if (!isLoading) {
+        localStorage.setItem('sas_channels', JSON.stringify(channels));
+    }
+  }, [channels, isLoading]);
 
   // --- Actions ---
 
@@ -97,9 +141,14 @@ const App: React.FC = () => {
 
   const startAuth = async (channelId: string) => {
     localStorage.setItem('sas_pending_auth_id', channelId);
-    const res = await fetch('/api/auth?action=url');
-    const data = await res.json();
-    if (data.url) window.location.href = data.url;
+    try {
+        const res = await fetch('/api/auth?action=url');
+        const data = await res.json();
+        if (data.url) window.location.href = data.url;
+        else alert("無法獲取授權 URL，請檢查 Server Config (Client ID)");
+    } catch (e) {
+        alert("API 請求失敗，請確認後端是否運行。");
+    }
   };
 
   const runAutomation = async (channel: ChannelConfig) => {
@@ -126,7 +175,7 @@ const App: React.FC = () => {
         }
         updateChannel(channel.id, { status: 'success', lastRun: new Date().toLocaleString() });
       } else {
-        addLog(channel.id, channel.name, 'error', `❌ 失敗: ${result.logs?.pop() || 'Unknown error'}`);
+        addLog(channel.id, channel.name, 'error', `❌ 失敗: ${result.logs?.pop() || result.error || 'Unknown error'}`);
         updateChannel(channel.id, { status: 'error' });
       }
     } catch (e: any) {
@@ -135,7 +184,14 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Render Helpers ---
+  if (isLoading) {
+      return (
+          <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400">
+              <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p>System Initializing...</p>
+          </div>
+      );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
@@ -346,6 +402,14 @@ const App: React.FC = () => {
       </main>
     </div>
   );
+};
+
+const App: React.FC = () => {
+    return (
+        <ErrorBoundary>
+            <AppContent />
+        </ErrorBoundary>
+    );
 };
 
 export default App;
