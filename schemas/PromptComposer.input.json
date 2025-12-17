@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromptComposer Input",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "subject_type": { "type": "string" },
+    "action_verb": { "type": "string" },
+    "object_type": { "type": "string" },
+    "structure_type": { "type": "string" },
+    "algorithm_signals": { "type": "array", "items": { "type": "string" } },
+    "total_score": { "type": "number" },
+    "selected": { "type": "boolean", "const": true }
+  },
+  "required": ["id", "subject_type", "selected"]
+}

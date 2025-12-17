@@ -1,0 +1,17 @@
+{
+  "candidate_id": "gen_001",
+  "prompt": "Cinematic close-up shot of a massive hydraulic press slowly descending onto a colorful army of 1000 gummy bears. 4k resolution, high contrast lighting, sticky texture details, extreme slow motion impact.",
+  "title_template": "Hydraulic Press vs 1000 Gummy Bears! 😱 (Satisfying)",
+  "description_template": "Can a gummy bear army stop a hydraulic press? Watch the most satisfying crush! #satisfying #experiment #shorts",
+  "candidate_reference": {
+    "id": "gen_001",
+    "subject_type": "Hydraulic Press",
+    "action_verb": "Crush",
+    "object_type": "Gummy Bear Army",
+    "structure_type": "Experiment",
+    "algorithm_signals": ["satisfying", "destruction"],
+    "rationale": "High visual impact.",
+    "total_score": 28,
+    "selected": true
+  }
+}

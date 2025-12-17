@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromptComposer Output",
+  "type": "object",
+  "properties": {
+    "candidate_id": { "type": "string" },
+    "prompt": { "type": "string", "description": "Detailed prompt for video generation models" },
+    "title_template": { "type": "string", "description": "Viral title format" },
+    "description_template": { "type": "string", "description": "SEO friendly description" },
+    "candidate_reference": { "type": "object", "description": "Original candidate object" }
+  },
+  "required": ["candidate_id", "prompt", "title_template", "description_template", "candidate_reference"]
+}

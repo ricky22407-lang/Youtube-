@@ -1,0 +1,16 @@
+{
+  "id": "gen_001",
+  "subject_type": "Hydraulic Press",
+  "action_verb": "Crush",
+  "object_type": "Gummy Bear Army",
+  "structure_type": "Experiment",
+  "algorithm_signals": ["satisfying", "destruction"],
+  "rationale": "High visual impact.",
+  "total_score": 28,
+  "selected": true,
+  "scoring_breakdown": {
+    "virality": 9,
+    "feasibility": 10,
+    "trend_alignment": 9
+  }
+}
