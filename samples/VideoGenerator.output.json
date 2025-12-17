@@ -1,0 +1,7 @@
+{
+  "candidate_id": "gen_001",
+  "video_url": "blob:http://localhost:3000/1234-5678-90ab",
+  "mime_type": "video/mp4",
+  "status": "generated",
+  "generated_at": "2023-10-27T10:00:00.000Z"
+}

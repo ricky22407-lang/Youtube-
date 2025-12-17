@@ -49,6 +49,14 @@ export interface PromptOutput {
   candidate_reference: CandidateTheme;
 }
 
+export interface VideoAsset {
+  candidate_id: string;
+  video_url: string; // Blob URL for frontend display
+  mime_type: string;
+  status: 'generated' | 'failed';
+  generated_at: string;
+}
+
 // Module Interfaces
 export interface IModule<Input, Output> {
   name: string;

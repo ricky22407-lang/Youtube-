@@ -4,12 +4,16 @@ import { TrendSignalExtractor } from './modules/TrendSignalExtractor';
 import { CandidateThemeGenerator } from './modules/CandidateThemeGenerator';
 import { CandidateWeightEngine } from './modules/CandidateWeightEngine';
 import { PromptComposer } from './modules/PromptComposer';
+import { VideoGenerator } from './modules/VideoGenerator';
+
 import { runTrendExtractorTests } from './tests/TrendSignalExtractor.test';
 import { runCandidateGeneratorTests } from './tests/CandidateThemeGenerator.test';
 import { runWeightEngineTests } from './tests/CandidateWeightEngine.test';
 import { runPromptComposerTests } from './tests/PromptComposer.test';
+import { runVideoGeneratorTests } from './tests/VideoGenerator.test';
+
 import { MOCK_SHORTS_DATA, MOCK_CHANNEL_STATE } from './constants';
-import { ShortsData, TrendSignals, CandidateTheme, PromptOutput, TestResult } from './types';
+import { ShortsData, TrendSignals, CandidateTheme, PromptOutput, VideoAsset, TestResult } from './types';
 
 const App: React.FC = () => {
   // State for pipeline data
@@ -17,18 +21,21 @@ const App: React.FC = () => {
   const [candidates, setCandidates] = useState<CandidateTheme[] | null>(null);
   const [scoredCandidates, setScoredCandidates] = useState<CandidateTheme[] | null>(null);
   const [promptOutput, setPromptOutput] = useState<PromptOutput | null>(null);
+  const [videoAsset, setVideoAsset] = useState<VideoAsset | null>(null);
 
   // State for statuses
   const [s1Status, setS1Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [s2Status, setS2Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [s3Status, setS3Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [s4Status, setS4Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [s5Status, setS5Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Test Results
   const [t1Result, setT1Result] = useState<TestResult | null>(null);
   const [t2Result, setT2Result] = useState<TestResult | null>(null);
   const [t3Result, setT3Result] = useState<TestResult | null>(null);
   const [t4Result, setT4Result] = useState<TestResult | null>(null);
+  const [t5Result, setT5Result] = useState<TestResult | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -37,6 +44,7 @@ const App: React.FC = () => {
   const generator = new CandidateThemeGenerator();
   const weighter = new CandidateWeightEngine();
   const composer = new PromptComposer();
+  const videoGen = new VideoGenerator();
 
   // Handlers
   const handleExecuteExtractor = async () => {
@@ -96,26 +104,26 @@ const App: React.FC = () => {
     }
   };
 
-  const runTest1 = async () => {
-     const res = await runTrendExtractorTests();
-     setT1Result(res);
-     return res;
-  }
-  const runTest2 = async () => {
-    const res = await runCandidateGeneratorTests();
-    setT2Result(res);
-    return res;
-  }
-  const runTest3 = async () => {
-    const res = await runWeightEngineTests();
-    setT3Result(res);
-    return res;
-  }
-  const runTest4 = async () => {
-    const res = await runPromptComposerTests();
-    setT4Result(res);
-    return res;
-  }
+  const handleExecuteVideoGen = async () => {
+    if (!promptOutput) return;
+    setS5Status('loading');
+    setErrorMsg(null);
+    try {
+      // NOTE: This triggers real Veo generation which can take time.
+      const result = await videoGen.execute(promptOutput);
+      setVideoAsset(result);
+      setS5Status('success');
+    } catch (e: any) {
+      setErrorMsg(e.message);
+      setS5Status('error');
+    }
+  };
+
+  const runTest1 = async () => { const res = await runTrendExtractorTests(); setT1Result(res); return res; }
+  const runTest2 = async () => { const res = await runCandidateGeneratorTests(); setT2Result(res); return res; }
+  const runTest3 = async () => { const res = await runWeightEngineTests(); setT3Result(res); return res; }
+  const runTest4 = async () => { const res = await runPromptComposerTests(); setT4Result(res); return res; }
+  const runTest5 = async () => { const res = await runVideoGeneratorTests(); setT5Result(res); return res; }
 
 
   return (
@@ -205,6 +213,7 @@ const App: React.FC = () => {
 
         {/* Phase 4 */}
         <div className="relative">
+          <div className="absolute left-6 top-8 bottom-0 w-0.5 bg-slate-700 -z-10 h-full"></div>
           <div className="flex items-start gap-4">
             <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center font-bold shrink-0 transition-colors ${scoredCandidates ? 'bg-slate-800 border-indigo-500 text-indigo-400' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
               04
@@ -220,6 +229,43 @@ const App: React.FC = () => {
                 testResult={t4Result}
                 data={promptOutput}
               />
+            </div>
+          </div>
+        </div>
+
+        {/* Phase 5 */}
+        <div className="relative">
+          <div className="flex items-start gap-4">
+            <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center font-bold shrink-0 transition-colors ${promptOutput ? 'bg-slate-800 border-pink-500 text-pink-400' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
+              05
+            </div>
+            <div className="flex-1">
+              <ModuleCard
+                title="Video Generator (Veo)"
+                description="Generates AI Video using Veo-3.1-fast model (MP4)."
+                status={s5Status}
+                canExecute={!!promptOutput}
+                onExecute={handleExecuteVideoGen}
+                onRunTest={runTest5}
+                testResult={t5Result}
+                data={videoAsset}
+              />
+              {/* Video Player Output */}
+              {videoAsset && videoAsset.status === 'generated' && (
+                <div className="mt-4 p-4 bg-black rounded-xl border border-slate-700">
+                  <h4 className="text-white font-bold mb-2 text-sm">Preview: {promptOutput?.title_template}</h4>
+                  <video 
+                    src={videoAsset.video_url} 
+                    controls 
+                    autoPlay 
+                    loop 
+                    className="w-[200px] rounded shadow-lg mx-auto" // 9:16 aspect ratio hint
+                  />
+                  <div className="text-center mt-2 text-xs text-slate-400">
+                    <p>{promptOutput?.description_template}</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
