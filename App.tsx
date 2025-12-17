@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense, Component } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { 
   ChannelConfig, LogEntry, ChannelState, ScheduleConfig, PipelineResult, AuthCredentials 
 } from './types';
@@ -14,7 +14,7 @@ interface ErrorBoundaryState {
 }
 
 // Error Boundary Component
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = {
     hasError: false,
     error: null

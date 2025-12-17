@@ -9,11 +9,6 @@ const getEnv = (key: string) => {
   return '';
 };
 
-const API_KEY = getEnv('API_KEY');
-
-// Initialize conditionally to allow file to be imported without crashing
-const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
-
 const textModelId = "gemini-2.5-flash";
 const videoModelId = "veo-3.1-fast-generate-preview";
 
@@ -22,9 +17,12 @@ export const generateJSON = async <T>(
   systemInstruction: string,
   responseSchema?: any
 ): Promise<T> => {
-  if (!ai || !API_KEY) {
+  const apiKey = getEnv('API_KEY');
+  if (!apiKey) {
     throw new Error("Server Error: API_KEY is missing. Please check Vercel environment variables.");
   }
+
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const response = await ai.models.generateContent({
@@ -51,9 +49,15 @@ export const generateJSON = async <T>(
 };
 
 export const generateVideo = async (prompt: string): Promise<string> => {
-  if (!ai || !API_KEY) {
-    throw new Error("Server Error: API_KEY is missing.");
+  const apiKey = getEnv('API_KEY');
+  if (!apiKey) {
+    throw new Error("CRITICAL: API_KEY is missing. Veo requires a valid API Key.");
   }
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  console.log(`[Veo] Starting generation. Model: ${videoModelId}`);
+  console.log(`[Veo] Key Status: ${apiKey.substring(0, 4)}... (Check permissions & billing)`);
 
   // Vercel Hobby limits functions to 10s (sometimes 60s). Veo takes longer.
   // We add a safety timeout to fail gracefully instead of hard crashing the function.
@@ -61,7 +65,6 @@ export const generateVideo = async (prompt: string): Promise<string> => {
 
   const generatePromise = async () => {
     try {
-      console.log("Starting Veo generation (Server-Side)...");
       let operation = await ai.models.generateVideos({
         model: videoModelId,
         prompt: prompt,
@@ -72,22 +75,32 @@ export const generateVideo = async (prompt: string): Promise<string> => {
         }
       });
 
+      console.log("[Veo] Operation started. Polling for completion...");
+
       // Polling loop
       while (!operation.done) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         operation = await ai.operations.getVideosOperation({operation: operation});
-        console.log("Polling status:", operation.metadata?.state);
+        console.log(`[Veo] Polling state: ${operation.metadata?.state}`);
+        
+        if (operation.error) {
+             throw new Error(`Veo Operation Error: ${JSON.stringify(operation.error)}`);
+        }
       }
 
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
       if (!downloadLink) {
-        throw new Error("Video generation completed but no URI returned.");
+        throw new Error("Veo completed but returned NO video URI. The output might have been blocked by safety filters.");
       }
 
+      console.log("[Veo] Generation complete. Fetching video bytes...");
+
       // Fetch the raw MP4 bytes using the API Key
-      const response = await fetch(`${downloadLink}&key=${API_KEY}`);
+      const response = await fetch(`${downloadLink}&key=${apiKey}`);
+      
       if (!response.ok) {
-        throw new Error(`Failed to download video bytes: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`Failed to download video bytes. Status: ${response.status}. Details: ${errorText}`);
       }
 
       const arrayBuffer = await response.arrayBuffer();
@@ -97,7 +110,6 @@ export const generateVideo = async (prompt: string): Promise<string> => {
       if (typeof Buffer !== 'undefined') {
           base64 = Buffer.from(arrayBuffer).toString('base64');
       } else {
-          // Fallback or Error
           throw new Error("Environment does not support Buffer (Client-side execution blocked).");
       }
       
@@ -105,7 +117,8 @@ export const generateVideo = async (prompt: string): Promise<string> => {
 
     } catch (error: any) {
       console.error("Gemini API Error (Video):", error);
-      throw error;
+      // Propagate the full error message
+      throw new Error(`Veo API Failure: ${error.message || JSON.stringify(error)}`);
     }
   };
 
@@ -113,7 +126,7 @@ export const generateVideo = async (prompt: string): Promise<string> => {
   return Promise.race([
     generatePromise(),
     new Promise<string>((_, reject) => 
-        setTimeout(() => reject(new Error("Video Generation Timed Out (Vercel limit reached).")), TIMEOUT_MS)
+        setTimeout(() => reject(new Error("Video Generation Timed Out (Vercel limit reached). Check logs.")), TIMEOUT_MS)
     )
   ]);
 };

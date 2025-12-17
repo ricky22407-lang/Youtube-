@@ -31,7 +31,6 @@ export default async function handler(req: any, res: any) {
     const envStatus = {
       API_KEY: process.env.API_KEY ? "Present" : "MISSING",
       GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? "Present" : "MISSING",
-      GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? "Present" : "MISSING",
     };
     log(`Env Check: ${JSON.stringify(envStatus)}`);
 
@@ -39,7 +38,7 @@ export default async function handler(req: any, res: any) {
       throw new Error("Server Misconfiguration: API_KEY is missing.");
     }
 
-    // 3. Body Parsing (Robust)
+    // 3. Body Parsing
     let body;
     try {
         body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -60,7 +59,6 @@ export default async function handler(req: any, res: any) {
     let shortsData: ShortsData[] = [];
     
     try {
-        // Fallback Logic: If no Auth and no Server Client ID, force Mock
         const hasAuth = channelConfig.auth || (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
         
         if (forceMock || !hasAuth) {
@@ -108,12 +106,26 @@ export default async function handler(req: any, res: any) {
     const videoGen = new VideoGenerator();
     let videoAsset;
     try {
+        log("🎬 Starting Veo Video Generation (this may take up to 60s)...");
         videoAsset = await videoGen.execute(promptOutput);
         log("✅ Video Generated (Veo 3.1 9:16)");
     } catch (e: any) {
-        console.error("Video Generation Failed:", e);
-        log(`⚠️ Video Generation Failed: ${e.message}`);
-        throw new Error(`Veo Generation Error: ${e.message}`);
+        console.error("CRITICAL: Video Generation Failed", e);
+        
+        // Detailed Error Logging for Frontend
+        log(`❌ Veo Error: ${e.message}`);
+        
+        // Add specific hints for common errors
+        if (e.message.includes("429") || e.message.includes("quota")) {
+            log("💡 HINT: API Quota Exceeded. Check Google Cloud Console.");
+        } else if (e.message.includes("400")) {
+            log("💡 HINT: Bad Request. Check if Veo model is enabled in your project.");
+        } else if (e.message.includes("Timed Out")) {
+            log("💡 HINT: Vercel Function Timed Out (Max 10s/60s). Veo is slow.");
+        }
+
+        // RE-THROW to stop the pipeline. Do NOT proceed to upload.
+        throw new Error(`Veo Generation Failed: ${e.message}`);
     }
 
     // --- Step 6: Upload to YouTube ---
@@ -132,7 +144,6 @@ export default async function handler(req: any, res: any) {
         log(`✅ Upload Process Complete. Status: ${uploadResult.status}`);
     } catch (e: any) {
          log(`⚠️ Upload Failed: ${e.message}`);
-         // Return partial success so the pipeline doesn't look like a total failure
          uploadResult = { status: 'failed', platform_url: '', video_id: '', uploaded_at: new Date().toISOString() };
     }
     
@@ -152,13 +163,13 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     console.error("CRITICAL PIPELINE FAILURE:", error);
     
-    // IMPORTANT: Return 200 OK with error info so Frontend ErrorBoundary/Logic can handle it.
-    // Returning 500 causes Vercel to show a generic error page which hides our logs.
+    // Return 200 OK with success: false so Frontend can read the logs
     return res.status(200).json({ 
         success: false, 
         logs: logs, 
         error: error.message || "Unknown Server Error",
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        // Include stack only in dev or if needed for debugging
+        details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
     });
   }
 }
