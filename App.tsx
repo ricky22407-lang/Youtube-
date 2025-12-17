@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { ModuleCard } from './components/ModuleCard';
 import { TrendSignalExtractor } from './modules/TrendSignalExtractor';
 import { CandidateThemeGenerator } from './modules/CandidateThemeGenerator';
@@ -7,6 +7,7 @@ import { PromptComposer } from './modules/PromptComposer';
 import { VideoGenerator } from './modules/VideoGenerator';
 import { UploaderScheduler } from './modules/UploaderScheduler';
 
+// Tests
 import { runTrendExtractorTests } from './tests/TrendSignalExtractor.test';
 import { runCandidateGeneratorTests } from './tests/CandidateThemeGenerator.test';
 import { runWeightEngineTests } from './tests/CandidateWeightEngine.test';
@@ -16,246 +17,392 @@ import { runUploaderTests } from './tests/UploaderScheduler.test';
 
 import { MOCK_SHORTS_DATA, MOCK_CHANNEL_STATE } from './constants';
 import { 
-  ShortsData, TrendSignals, CandidateTheme, PromptOutput, VideoAsset, 
+  TrendSignals, CandidateTheme, PromptOutput, VideoAsset, 
   UploadResult, TestResult 
 } from './types';
 
 const App: React.FC = () => {
-  // State for pipeline data
-  const [trendSignals, setTrendSignals] = useState<TrendSignals | null>(null);
-  const [candidates, setCandidates] = useState<CandidateTheme[] | null>(null);
-  const [scoredCandidates, setScoredCandidates] = useState<CandidateTheme[] | null>(null);
-  const [promptOutput, setPromptOutput] = useState<PromptOutput | null>(null);
-  const [videoAsset, setVideoAsset] = useState<VideoAsset | null>(null);
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  // --- State Management ---
+  const [pipelineState, setPipelineState] = useState({
+    trendSignals: null as TrendSignals | null,
+    candidates: null as CandidateTheme[] | null,
+    scoredCandidates: null as CandidateTheme[] | null,
+    promptOutput: null as PromptOutput | null,
+    videoAsset: null as VideoAsset | null,
+    uploadResult: null as UploadResult | null,
+  });
 
-  // State for statuses
-  const [s1Status, setS1Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [s2Status, setS2Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [s3Status, setS3Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [s4Status, setS4Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [s5Status, setS5Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [s6Status, setS6Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [statuses, setStatuses] = useState({
+    s1: 'idle' as const,
+    s2: 'idle' as const,
+    s3: 'idle' as const,
+    s4: 'idle' as const,
+    s5: 'idle' as const,
+    s6: 'idle' as const,
+  });
 
-  // Test Results
-  const [t1Result, setT1Result] = useState<TestResult | null>(null);
-  const [t2Result, setT2Result] = useState<TestResult | null>(null);
-  const [t3Result, setT3Result] = useState<TestResult | null>(null);
-  const [t4Result, setT4Result] = useState<TestResult | null>(null);
-  const [t5Result, setT5Result] = useState<TestResult | null>(null);
-  const [t6Result, setT6Result] = useState<TestResult | null>(null);
+  const [testResults, setTestResults] = useState({
+    t1: null as TestResult | null,
+    t2: null as TestResult | null,
+    t3: null as TestResult | null,
+    t4: null as TestResult | null,
+    t5: null as TestResult | null,
+    t6: null as TestResult | null,
+  });
 
+  const [globalProgress, setGlobalProgress] = useState(0);
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Module Instances
-  const extractor = new TrendSignalExtractor();
-  const generator = new CandidateThemeGenerator();
-  const weighter = new CandidateWeightEngine();
-  const composer = new PromptComposer();
-  const videoGen = new VideoGenerator();
-  const uploader = new UploaderScheduler();
+  // --- Module Instances ---
+  // Using refs to keep instances stable across renders, though simple instantiation is also fine here.
+  const modules = useRef({
+    extractor: new TrendSignalExtractor(),
+    generator: new CandidateThemeGenerator(),
+    weighter: new CandidateWeightEngine(),
+    composer: new PromptComposer(),
+    videoGen: new VideoGenerator(),
+    uploader: new UploaderScheduler(),
+  }).current;
 
-  // Handlers
-  const handleExecuteExtractor = async () => {
-    setS1Status('loading'); setErrorMsg(null);
-    try {
-      const result = await extractor.execute(MOCK_SHORTS_DATA);
-      setTrendSignals(result); setS1Status('success');
-    } catch (e: any) { setErrorMsg(e.message); setS1Status('error'); }
+  // --- Helper to update status ---
+  const updateStatus = (step: keyof typeof statuses, status: typeof statuses['s1']) => {
+    setStatuses(prev => ({ ...prev, [step]: status }));
   };
 
-  const handleExecuteGenerator = async () => {
-    if (!trendSignals) return;
-    setS2Status('loading'); setErrorMsg(null);
+  // --- Individual Execution Handlers ---
+  
+  const step1_Extract = async () => {
+    updateStatus('s1', 'loading'); setErrorMsg(null);
     try {
-      const result = await generator.execute(trendSignals);
-      setCandidates(result); setS2Status('success');
-    } catch (e: any) { setErrorMsg(e.message); setS2Status('error'); }
+      const res = await modules.extractor.execute(MOCK_SHORTS_DATA);
+      setPipelineState(prev => ({ ...prev, trendSignals: res }));
+      updateStatus('s1', 'success');
+      return res;
+    } catch (e: any) { setErrorMsg(e.message); updateStatus('s1', 'error'); throw e; }
   };
 
-  const handleExecuteWeighter = async () => {
-    if (!candidates) return;
-    setS3Status('loading'); setErrorMsg(null);
+  const step2_Generate = async (input = pipelineState.trendSignals) => {
+    if (!input) throw new Error("缺少趨勢訊號資料");
+    updateStatus('s2', 'loading'); setErrorMsg(null);
     try {
-      const result = await weighter.execute({ candidates, channelState: MOCK_CHANNEL_STATE });
-      setScoredCandidates(result); setS3Status('success');
-    } catch (e: any) { setErrorMsg(e.message); setS3Status('error'); }
+      const res = await modules.generator.execute(input);
+      setPipelineState(prev => ({ ...prev, candidates: res }));
+      updateStatus('s2', 'success');
+      return res;
+    } catch (e: any) { setErrorMsg(e.message); updateStatus('s2', 'error'); throw e; }
   };
 
-  const handleExecuteComposer = async () => {
-    if (!scoredCandidates) return;
-    setS4Status('loading'); setErrorMsg(null);
+  const step3_Weight = async (input = pipelineState.candidates) => {
+    if (!input) throw new Error("缺少候選題材資料");
+    updateStatus('s3', 'loading'); setErrorMsg(null);
     try {
-      const selected = scoredCandidates.find(c => c.selected);
-      if (!selected) throw new Error("No candidate selected");
-      const result = await composer.execute(selected);
-      setPromptOutput(result); setS4Status('success');
-    } catch (e: any) { setErrorMsg(e.message); setS4Status('error'); }
+      const res = await modules.weighter.execute({ candidates: input, channelState: MOCK_CHANNEL_STATE });
+      setPipelineState(prev => ({ ...prev, scoredCandidates: res }));
+      updateStatus('s3', 'success');
+      return res;
+    } catch (e: any) { setErrorMsg(e.message); updateStatus('s3', 'error'); throw e; }
   };
 
-  const handleExecuteVideoGen = async () => {
-    if (!promptOutput) return;
-    setS5Status('loading'); setErrorMsg(null);
+  const step4_Compose = async (input = pipelineState.scoredCandidates) => {
+    if (!input) throw new Error("缺少已評分題材資料");
+    updateStatus('s4', 'loading'); setErrorMsg(null);
     try {
-      const result = await videoGen.execute(promptOutput);
-      setVideoAsset(result); setS5Status('success');
-    } catch (e: any) { setErrorMsg(e.message); setS5Status('error'); }
+      const selected = input.find(c => c.selected);
+      if (!selected) throw new Error("權重引擎未選出優勝題材");
+      const res = await modules.composer.execute(selected);
+      setPipelineState(prev => ({ ...prev, promptOutput: res }));
+      updateStatus('s4', 'success');
+      return res;
+    } catch (e: any) { setErrorMsg(e.message); updateStatus('s4', 'error'); throw e; }
   };
 
-  const handleExecuteUploader = async () => {
-    if (!videoAsset || !promptOutput) return;
-    setS6Status('loading'); setErrorMsg(null);
+  const step5_Video = async (input = pipelineState.promptOutput) => {
+    if (!input) throw new Error("缺少 Prompt 資料");
+    updateStatus('s5', 'loading'); setErrorMsg(null);
     try {
-      // Simulate a scheduled upload for 24 hours later
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      
-      const result = await uploader.execute({
-        video_asset: videoAsset,
-        metadata: promptOutput,
-        schedule: {
-          privacy_status: 'public',
-          publish_at: tomorrow.toISOString()
-        }
+      const res = await modules.videoGen.execute(input);
+      setPipelineState(prev => ({ ...prev, videoAsset: res }));
+      updateStatus('s5', 'success');
+      return res;
+    } catch (e: any) { setErrorMsg(e.message); updateStatus('s5', 'error'); throw e; }
+  };
+
+  const step6_Upload = async (videoAsset = pipelineState.videoAsset, metadata = pipelineState.promptOutput) => {
+    if (!videoAsset || !metadata) throw new Error("缺少影片或 Metadata 資料");
+    updateStatus('s6', 'loading'); setErrorMsg(null);
+    try {
+      const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+      const res = await modules.uploader.execute({
+        video_asset: videoAsset, metadata: metadata,
+        schedule: { privacy_status: 'public', publish_at: tomorrow.toISOString() }
       });
-      setUploadResult(result); setS6Status('success');
-    } catch (e: any) { setErrorMsg(e.message); setS6Status('error'); }
+      setPipelineState(prev => ({ ...prev, uploadResult: res }));
+      updateStatus('s6', 'success');
+      return res;
+    } catch (e: any) { setErrorMsg(e.message); updateStatus('s6', 'error'); throw e; }
   };
 
-  const runTest1 = async () => { const res = await runTrendExtractorTests(); setT1Result(res); return res; }
-  const runTest2 = async () => { const res = await runCandidateGeneratorTests(); setT2Result(res); return res; }
-  const runTest3 = async () => { const res = await runWeightEngineTests(); setT3Result(res); return res; }
-  const runTest4 = async () => { const res = await runPromptComposerTests(); setT4Result(res); return res; }
-  const runTest5 = async () => { const res = await runVideoGeneratorTests(); setT5Result(res); return res; }
-  const runTest6 = async () => { const res = await runUploaderTests(); setT6Result(res); return res; }
+  // --- Automation Orchestrator ---
+  const runFullAutomation = async () => {
+    if (isAutoRunning) return;
+    setIsAutoRunning(true);
+    setGlobalProgress(5);
+    setErrorMsg(null);
 
+    // Reset all statuses if starting fresh
+    setStatuses({ s1: 'idle', s2: 'idle', s3: 'idle', s4: 'idle', s5: 'idle', s6: 'idle' });
+
+    try {
+      // Step 1
+      const s1 = await step1_Extract();
+      setGlobalProgress(20);
+
+      // Step 2
+      const s2 = await step2_Generate(s1);
+      setGlobalProgress(35);
+
+      // Step 3
+      const s3 = await step3_Weight(s2);
+      setGlobalProgress(50);
+
+      // Step 4
+      const s4 = await step4_Compose(s3);
+      setGlobalProgress(65);
+
+      // Step 5
+      const s5 = await step5_Video(s4);
+      setGlobalProgress(85);
+
+      // Step 6
+      await step6_Upload(s5, s4);
+      setGlobalProgress(100);
+
+    } catch (error) {
+      console.error("Automation Stopped due to error");
+      // Error message is already set by individual steps
+    } finally {
+      setIsAutoRunning(false);
+    }
+  };
+
+  // --- Render ---
   return (
-    <div className="max-w-5xl mx-auto p-8">
-      <header className="mb-10 border-b border-slate-700 pb-6">
-        <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">
-          YouTube Shorts Automation System
-        </h1>
-        <p className="text-slate-400 mt-2">
-          Project Gemini & Grok • Automated Trend Analysis & Content Generation Pipeline
-        </p>
-      </header>
-
-      {errorMsg && (
-        <div className="mb-6 p-4 bg-red-900/50 border border-red-500 rounded text-red-200">
-          <strong>Error:</strong> {errorMsg}
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-indigo-500/30">
+      
+      {/* Navbar / Progress */}
+      <div className="fixed top-0 left-0 right-0 z-50 bg-slate-900/80 backdrop-blur-md border-b border-slate-700">
+        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-white">G</div>
+            <span className="font-bold text-lg tracking-tight">Shorts Automation System</span>
+          </div>
+          <div className="flex items-center gap-4">
+             <div className="text-xs text-slate-400">目前進度</div>
+             <div className="w-48 h-2 bg-slate-800 rounded-full overflow-hidden">
+               <div 
+                 className="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-all duration-700 ease-out" 
+                 style={{ width: `${globalProgress}%` }}
+               />
+             </div>
+             <div className="text-xs font-mono w-8 text-right">{globalProgress}%</div>
+          </div>
         </div>
-      )}
+      </div>
 
-      <div className="flex flex-col gap-8">
+      <div className="pt-24 pb-20 max-w-4xl mx-auto px-6">
         
-        {/* Phase 1-5 Cards (Simplified Rendering Logic for brevity, usually mapped) */}
-        {/* Phase 1 */}
-        <PipelineStep number="01" title="Trend Signal Extractor" 
-          desc="Analyzes raw input data to find statistical signals."
-          status={s1Status} canExec={true} onExec={handleExecuteExtractor} 
-          onTest={runTest1} testRes={t1Result} data={trendSignals} />
-        
-        {/* Phase 2 */}
-        <PipelineStep number="02" title="Candidate Theme Generator" 
-          desc="Brainstorms 3 creative concepts based on trend signals."
-          status={s2Status} canExec={!!trendSignals} onExec={handleExecuteGenerator} 
-          onTest={runTest2} testRes={t2Result} data={candidates} />
+        {/* Hero Section */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 mb-4">
+            YouTube Shorts 自動化系統
+          </h1>
+          <p className="text-slate-400 text-lg max-w-2xl mx-auto">
+            由 Gemini (工程) 與 Grok (PM) 協作打造。
+            <br />
+            全自動分析趨勢、生成題材、製作影片並排程上傳。
+          </p>
 
-        {/* Phase 3 */}
-        <PipelineStep number="03" title="Candidate Weight Engine" 
-          desc="Scores candidates on virality & feasibility. Picks the winner."
-          status={s3Status} canExec={!!candidates} onExec={handleExecuteWeighter} 
-          onTest={runTest3} testRes={t3Result} data={scoredCandidates} />
+          <button
+            onClick={runFullAutomation}
+            disabled={isAutoRunning}
+            className={`mt-8 px-8 py-4 rounded-full font-bold text-lg shadow-xl shadow-indigo-900/20 transform hover:scale-105 transition-all duration-300 flex items-center justify-center gap-3 mx-auto ${isAutoRunning ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white ring-4 ring-indigo-900/50'}`}
+          >
+            {isAutoRunning ? (
+              <>
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <span>自動化流程執行中...</span>
+              </>
+            ) : (
+              <>
+                <span>🚀 一鍵啟動自動化流程</span>
+              </>
+            )}
+          </button>
+        </div>
 
-        {/* Phase 4 */}
-        <PipelineStep number="04" title="Prompt Composer" 
-          desc="Generates final prompt, title template, and description."
-          status={s4Status} canExec={!!scoredCandidates} onExec={handleExecuteComposer} 
-          onTest={runTest4} testRes={t4Result} data={promptOutput} />
-
-        {/* Phase 5 */}
-        <div className="relative">
-          <div className="absolute left-6 top-8 bottom-0 w-0.5 bg-slate-700 -z-10 h-full"></div>
-          <div className="flex items-start gap-4">
-            <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center font-bold shrink-0 transition-colors ${promptOutput ? 'bg-slate-800 border-pink-500 text-pink-400' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
-              05
+        {/* Guide Section */}
+        <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6 mb-12">
+          <h3 className="text-white font-bold mb-4 flex items-center gap-2">
+            <span className="text-indigo-400">ℹ️</span> 操作指南
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-slate-300">
+            <div className="bg-slate-900/50 p-4 rounded-lg">
+              <div className="font-bold text-indigo-300 mb-1">Step 1. 數據輸入</div>
+              系統會自動讀取 Mock Data（模擬 Shorts 觀看數、標籤等），無需手動上傳。
             </div>
-            <div className="flex-1">
-              <ModuleCard
-                title="Video Generator (Veo)"
-                description="Generates AI Video using Veo-3.1-fast model (MP4)."
-                status={s5Status} canExecute={!!promptOutput} onExecute={handleExecuteVideoGen}
-                onRunTest={runTest5} testResult={t5Result} data={videoAsset}
-              />
-              {videoAsset && videoAsset.status === 'generated' && (
-                <div className="mt-4 p-4 bg-black rounded-xl border border-slate-700">
-                   <div className="flex gap-4">
-                    <video src={videoAsset.video_url} controls className="h-48 rounded shadow-lg" />
-                    <div className="text-sm text-slate-300">
-                      <div className="font-bold text-white mb-1">Generated Asset</div>
-                      <div>Type: MP4</div>
-                      <div>Size: 720x1280</div>
-                    </div>
-                   </div>
-                </div>
-              )}
+            <div className="bg-slate-900/50 p-4 rounded-lg">
+              <div className="font-bold text-indigo-300 mb-1">Step 2. 智慧生成</div>
+              點擊上方「一鍵啟動」，AI 將依序執行趨勢分析、題材篩選、腳本撰寫與影片製作。
+            </div>
+            <div className="bg-slate-900/50 p-4 rounded-lg">
+              <div className="font-bold text-indigo-300 mb-1">Step 3. 預覽與上傳</div>
+              流程結束後，您可直接預覽 MP4 影片，並查看模擬的 YouTube 上傳連結。
             </div>
           </div>
         </div>
 
-        {/* Phase 6 */}
-        <div className="relative">
-          <div className="flex items-start gap-4">
-            <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center font-bold shrink-0 transition-colors ${videoAsset ? 'bg-slate-800 border-red-500 text-red-400' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
-              06
-            </div>
-            <div className="flex-1">
-              <ModuleCard
-                title="Uploader & Scheduler"
-                description="Uploads to YouTube and schedules publication."
-                status={s6Status} canExecute={!!videoAsset} onExecute={handleExecuteUploader}
-                onRunTest={runTest6} testResult={t6Result} data={uploadResult}
-              />
-              {uploadResult && uploadResult.status !== 'failed' && (
-                <div className="mt-4 p-4 bg-green-900/20 border border-green-500/50 rounded-xl flex flex-col items-center">
-                  <div className="text-green-400 font-bold text-lg mb-2">🎉 Pipeline Complete!</div>
-                  <a href={uploadResult.platform_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 underline font-mono text-xl">
-                    {uploadResult.platform_url}
-                  </a>
-                  <div className="text-slate-400 text-sm mt-2">
-                    Status: <span className="uppercase text-white">{uploadResult.status}</span>
-                    {uploadResult.scheduled_for && <span> • Live at: {new Date(uploadResult.scheduled_for).toLocaleString()}</span>}
-                  </div>
-                </div>
-              )}
+        {/* Error Display */}
+        {errorMsg && (
+          <div className="mb-8 p-4 bg-red-900/20 border-l-4 border-red-500 rounded-r text-red-200 flex items-start gap-3 animate-shake">
+            <div className="text-xl">⚠️</div>
+            <div>
+              <strong className="block font-bold">系統發生錯誤</strong>
+              <p className="text-sm opacity-90">{errorMsg}</p>
+              <p className="text-xs mt-2 opacity-70">建議：請檢查 API Key 配額或網路連線，並重試。</p>
             </div>
           </div>
+        )}
+
+        {/* Pipeline Steps (Vertical Layout) */}
+        <div className="flex flex-col gap-12 relative">
+           {/* Connector Line */}
+           <div className="absolute left-[19px] top-10 bottom-10 w-0.5 bg-gradient-to-b from-indigo-900 via-slate-700 to-slate-900 -z-10"></div>
+
+           <ModuleCard
+             stepNumber="01"
+             title="趨勢訊號分析 (Trend Extractor)"
+             description="分析原始 Shorts 數據，提取動作、主體、物件與演算法關鍵字的頻率分佈。"
+             status={statuses.s1}
+             canExecute={true}
+             onExecute={step1_Extract}
+             onRunTest={async () => { const r = await runTrendExtractorTests(); setTestResults(p => ({...p, t1: r})); return r; }}
+             data={pipelineState.trendSignals}
+             testResult={testResults.t1}
+           />
+
+           <ModuleCard
+             stepNumber="02"
+             title="候選題材生成 (Candidate Generator)"
+             description="根據趨勢訊號，腦力激盪出 3 個具備爆紅潛力的短影片創意提案。"
+             status={statuses.s2}
+             canExecute={!!pipelineState.trendSignals}
+             onExecute={() => step2_Generate()}
+             onRunTest={async () => { const r = await runCandidateGeneratorTests(); setTestResults(p => ({...p, t2: r})); return r; }}
+             data={pipelineState.candidates}
+             testResult={testResults.t2}
+           />
+
+           <ModuleCard
+             stepNumber="03"
+             title="題材權重評分 (Weight Engine)"
+             description="針對頻道屬性進行評分（病毒性、執行度、趨勢度），選出唯一的優勝題材。"
+             status={statuses.s3}
+             canExecute={!!pipelineState.candidates}
+             onExecute={() => step3_Weight()}
+             onRunTest={async () => { const r = await runWeightEngineTests(); setTestResults(p => ({...p, t3: r})); return r; }}
+             data={pipelineState.scoredCandidates}
+             testResult={testResults.t3}
+           />
+
+           <ModuleCard
+             stepNumber="04"
+             title="提示詞與腳本撰寫 (Prompt Composer)"
+             description="為優勝題材生成詳細的 AI 繪圖/影片提示詞 (Prompt)，以及吸睛標題與 SEO 描述。"
+             status={statuses.s4}
+             canExecute={!!pipelineState.scoredCandidates}
+             onExecute={() => step4_Compose()}
+             onRunTest={async () => { const r = await runPromptComposerTests(); setTestResults(p => ({...p, t4: r})); return r; }}
+             data={pipelineState.promptOutput}
+             testResult={testResults.t4}
+           />
+
+           <ModuleCard
+             stepNumber="05"
+             title="AI 影片生成 (Video Generator - Veo)"
+             description="呼叫 Google Veo 模型，根據 Prompt 生成真實的 MP4 短影片素材。"
+             status={statuses.s5}
+             canExecute={!!pipelineState.promptOutput}
+             onExecute={() => step5_Video()}
+             onRunTest={async () => { const r = await runVideoGeneratorTests(); setTestResults(p => ({...p, t5: r})); return r; }}
+             data={pipelineState.videoAsset}
+             testResult={testResults.t5}
+           >
+             {pipelineState.videoAsset && pipelineState.videoAsset.status === 'generated' && (
+               <div className="bg-black rounded-lg overflow-hidden border border-slate-700 shadow-2xl max-w-sm mx-auto">
+                 <div className="relative aspect-[9/16]">
+                    <video 
+                      src={pipelineState.videoAsset.video_url} 
+                      controls 
+                      autoPlay 
+                      loop 
+                      className="w-full h-full object-cover"
+                    />
+                 </div>
+                 <div className="p-3 bg-slate-900">
+                    <div className="text-xs text-slate-400 mb-1">預覽標題</div>
+                    <div className="font-bold text-white text-sm line-clamp-2">{pipelineState.promptOutput?.title_template}</div>
+                 </div>
+               </div>
+             )}
+           </ModuleCard>
+
+           <ModuleCard
+             stepNumber="06"
+             title="自動上傳與排程 (Uploader)"
+             description="模擬 YouTube API 上傳流程，並設定影片隱私狀態與發布時間。"
+             status={statuses.s6}
+             canExecute={!!pipelineState.videoAsset}
+             onExecute={() => step6_Upload()}
+             onRunTest={async () => { const r = await runUploaderTests(); setTestResults(p => ({...p, t6: r})); return r; }}
+             data={pipelineState.uploadResult}
+             testResult={testResults.t6}
+           >
+             {pipelineState.uploadResult && pipelineState.uploadResult.status !== 'failed' && (
+               <div className="bg-gradient-to-r from-green-900/40 to-emerald-900/40 border border-green-500/30 rounded-xl p-6 text-center animate-fade-in">
+                 <div className="text-4xl mb-2">🎉</div>
+                 <h4 className="text-xl font-bold text-green-300 mb-2">自動化流程執行完畢！</h4>
+                 <p className="text-slate-300 text-sm mb-4">影片已成功排程並上傳至 YouTube</p>
+                 
+                 <a 
+                   href={pipelineState.uploadResult.platform_url} 
+                   target="_blank" 
+                   rel="noreferrer" 
+                   className="inline-flex items-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold transition-colors"
+                 >
+                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                   前往 YouTube 觀看
+                 </a>
+                 
+                 <div className="mt-4 text-xs text-slate-500 font-mono">
+                   Video ID: {pipelineState.uploadResult.video_id} <br/>
+                   Scheduled: {new Date(pipelineState.uploadResult.scheduled_for || '').toLocaleString()}
+                 </div>
+               </div>
+             )}
+           </ModuleCard>
+
         </div>
 
       </div>
       
-      <div className="h-20"></div>
+      {/* Footer */}
+      <footer className="bg-slate-900 border-t border-slate-800 py-8 text-center text-slate-500 text-sm">
+        <p>© 2023 Shorts Automation System.</p>
+        <p className="mt-2 text-xs">Roles: Gemini (Engineering) • Grok (Product Management)</p>
+      </footer>
     </div>
   );
 };
-
-// Helper Component for repeated structure
-const PipelineStep = ({number, title, desc, status, canExec, onExec, onTest, testRes, data}: any) => (
-  <div className="relative">
-    <div className="absolute left-6 top-8 bottom-0 w-0.5 bg-slate-700 -z-10 h-full"></div>
-    <div className="flex items-start gap-4">
-      <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center font-bold shrink-0 transition-colors ${data ? 'bg-slate-800 border-indigo-500 text-indigo-400' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
-        {number}
-      </div>
-      <div className="flex-1">
-        <ModuleCard
-          title={title} description={desc} status={status}
-          canExecute={canExec} onExecute={onExec} onRunTest={onTest}
-          testResult={testRes} data={data}
-        />
-      </div>
-    </div>
-  </div>
-);
 
 export default App;
