@@ -44,9 +44,9 @@ export const generateJSON = async <T>(
     }
 
     return JSON.parse(text) as T;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini API Error (Text):", error);
-    throw error;
+    throw new Error(`Text Gen Failed: ${error.message}`);
   }
 };
 
@@ -55,51 +55,65 @@ export const generateVideo = async (prompt: string): Promise<string> => {
     throw new Error("Server Error: API_KEY is missing.");
   }
 
-  try {
-    console.log("Starting Veo generation (Server-Side)...");
-    let operation = await ai.models.generateVideos({
-      model: videoModelId,
-      prompt: prompt,
-      config: {
-        numberOfVideos: 1,
-        resolution: '720p',
-        aspectRatio: '9:16'
+  // Vercel Hobby limits functions to 10s (sometimes 60s). Veo takes longer.
+  // We add a safety timeout to fail gracefully instead of hard crashing the function.
+  const TIMEOUT_MS = 55000; // 55 seconds safety margin
+
+  const generatePromise = async () => {
+    try {
+      console.log("Starting Veo generation (Server-Side)...");
+      let operation = await ai.models.generateVideos({
+        model: videoModelId,
+        prompt: prompt,
+        config: {
+          numberOfVideos: 1,
+          resolution: '720p',
+          aspectRatio: '9:16'
+        }
+      });
+
+      // Polling loop
+      while (!operation.done) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        operation = await ai.operations.getVideosOperation({operation: operation});
+        console.log("Polling status:", operation.metadata?.state);
       }
-    });
 
-    // Polling loop
-    while (!operation.done) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      operation = await ai.operations.getVideosOperation({operation: operation});
-      console.log("Polling status:", operation.metadata?.state);
+      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+      if (!downloadLink) {
+        throw new Error("Video generation completed but no URI returned.");
+      }
+
+      // Fetch the raw MP4 bytes using the API Key
+      const response = await fetch(`${downloadLink}&key=${API_KEY}`);
+      if (!response.ok) {
+        throw new Error(`Failed to download video bytes: ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      
+      // Server-side buffer handling
+      let base64 = '';
+      if (typeof Buffer !== 'undefined') {
+          base64 = Buffer.from(arrayBuffer).toString('base64');
+      } else {
+          // Fallback or Error
+          throw new Error("Environment does not support Buffer (Client-side execution blocked).");
+      }
+      
+      return `data:video/mp4;base64,${base64}`;
+
+    } catch (error: any) {
+      console.error("Gemini API Error (Video):", error);
+      throw error;
     }
+  };
 
-    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) {
-      throw new Error("Video generation completed but no URI returned.");
-    }
-
-    // Fetch the raw MP4 bytes using the API Key
-    const response = await fetch(`${downloadLink}&key=${API_KEY}`);
-    if (!response.ok) {
-      throw new Error(`Failed to download video bytes: ${response.statusText}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    
-    // Server-side buffer handling
-    let base64 = '';
-    if (typeof Buffer !== 'undefined') {
-        base64 = Buffer.from(arrayBuffer).toString('base64');
-    } else {
-        // Fallback or Error
-        throw new Error("Environment does not support Buffer (Client-side execution blocked).");
-    }
-    
-    return `data:video/mp4;base64,${base64}`;
-
-  } catch (error) {
-    console.error("Gemini API Error (Video):", error);
-    throw error;
-  }
+  // Race between Generation and Timeout
+  return Promise.race([
+    generatePromise(),
+    new Promise<string>((_, reject) => 
+        setTimeout(() => reject(new Error("Video Generation Timed Out (Vercel limit reached).")), TIMEOUT_MS)
+    )
+  ]);
 };

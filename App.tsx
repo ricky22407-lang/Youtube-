@@ -4,12 +4,20 @@ import {
 } from './types';
 import { MOCK_CHANNEL_STATE } from './constants';
 
-// Error Boundary Component
-class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
-  public state = { hasError: false, error: null as Error | null };
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
 
-  constructor(props: {children: React.ReactNode}) {
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+// Error Boundary Component
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
     super(props);
+    this.state = { hasError: false, error: null };
   }
 
   static getDerivedStateFromError(error: Error) {
@@ -404,7 +412,7 @@ const AppContent: React.FC = () => {
   );
 };
 
-const App: React.FC = () => {
+const App = () => {
     return (
         <ErrorBoundary>
             <AppContent />

@@ -7,36 +7,76 @@ import { VideoGenerator } from '../modules/VideoGenerator';
 import { UploaderScheduler } from '../modules/UploaderScheduler';
 import { ChannelConfig, PipelineResult, ShortsData } from '../types';
 
+// Vercel Serverless Config
+// Attempt to increase timeout to 60s (Max for Hobby/Pro limits apply)
+export const config = {
+  maxDuration: 60, 
+};
+
 export default async function handler(req: any, res: any) {
+  const logs: string[] = [];
+  const log = (msg: string) => {
+    console.log(`[Pipeline] ${msg}`);
+    logs.push(msg);
+  };
+
+  log("Request Received");
+
+  // 1. Method Validation
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // Input is now a ChannelConfig object for full automation
-  const { channelConfig, forceMock } = req.body as { channelConfig: ChannelConfig, forceMock?: boolean };
+  // 2. Environment Diagnostics
+  const envStatus = {
+    API_KEY: process.env.API_KEY ? "OK" : "MISSING",
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? "OK" : "MISSING",
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? "OK" : "MISSING",
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || "MISSING"
+  };
+  console.log("Environment Diagnostics:", JSON.stringify(envStatus, null, 2));
 
   if (!process.env.API_KEY) {
-    return res.status(500).json({ error: 'Server configuration error: API_KEY is missing.' });
+    log("CRITICAL: API_KEY is missing from server environment.");
+    return res.status(500).json({ 
+        success: false, 
+        logs, 
+        error: 'Server Misconfiguration: API_KEY missing. Check Vercel Environment Variables.' 
+    });
   }
 
-  const logs: string[] = [];
-  const log = (msg: string) => {
-    console.log(msg);
-    logs.push(msg);
-  };
-
   try {
-    log(`🚀 Starting Automation for Channel: ${channelConfig.name}`);
+    // 3. Input Validation
+    const { channelConfig, forceMock } = req.body as { channelConfig: ChannelConfig, forceMock?: boolean };
+    
+    if (!channelConfig) {
+        throw new Error("Invalid Input: 'channelConfig' is required.");
+    }
+    
+    log(`🚀 Starting Automation for Channel: ${channelConfig.name} (${channelConfig.id})`);
 
     // --- Step 0: Trend Search (Real or Mock) ---
     const searcher = new TrendSearcher();
     let shortsData: ShortsData[];
-    if (forceMock) {
-        log("⚠️ Force Mock Data enabled.");
+    
+    try {
+        if (forceMock) {
+            log("⚠️ Force Mock Data enabled.");
+            shortsData = (searcher as any).getMockData();
+        } else {
+            // Safety check for TrendSearcher dependencies
+            if (!channelConfig.auth && !process.env.GOOGLE_CLIENT_ID) {
+                log("⚠️ No Auth & No Client ID. Falling back to Mock to prevent crash.");
+                shortsData = (searcher as any).getMockData();
+            } else {
+                shortsData = await searcher.execute(channelConfig);
+            }
+        }
+    } catch (e: any) {
+        log(`⚠️ Trend Search Failed: ${e.message}. Using Mock Data fallback.`);
         shortsData = (searcher as any).getMockData();
-    } else {
-        shortsData = await searcher.execute(channelConfig);
     }
+    
     log(`✅ Trends Fetched: ${shortsData.length} items`);
 
     // --- Step 1: Extract Signals ---
@@ -66,8 +106,14 @@ export default async function handler(req: any, res: any) {
 
     // --- Step 5: Generate Video (Veo) ---
     const videoGen = new VideoGenerator();
-    const videoAsset = await videoGen.execute(promptOutput);
-    log("✅ Video Generated (Veo 3.1 9:16)");
+    let videoAsset;
+    try {
+        videoAsset = await videoGen.execute(promptOutput);
+        log("✅ Video Generated (Veo 3.1 9:16)");
+    } catch (e: any) {
+        log(`⚠️ Video Generation Failed: ${e.message}`);
+        throw new Error(`Video Gen Error: ${e.message}. Possible Vercel Timeout or API limit.`);
+    }
 
     // --- Step 6: Upload to YouTube ---
     const uploader = new UploaderScheduler();
@@ -80,8 +126,15 @@ export default async function handler(req: any, res: any) {
         authCredentials: channelConfig.auth || undefined
     };
 
-    const uploadResult = await uploader.execute(uploadInput);
-    log(`✅ Upload Process Complete. Status: ${uploadResult.status}`);
+    let uploadResult;
+    try {
+        uploadResult = await uploader.execute(uploadInput);
+        log(`✅ Upload Process Complete. Status: ${uploadResult.status}`);
+    } catch (e: any) {
+         log(`⚠️ Upload Failed: ${e.message}`);
+         // We don't throw here, we return what we have so far
+         uploadResult = { status: 'failed', platform_url: '', video_id: '', uploaded_at: new Date().toISOString() };
+    }
     
     if (uploadResult.status === 'uploaded' || uploadResult.status === 'scheduled') {
         log(`🔗 URL: ${uploadResult.platform_url}`);
@@ -91,18 +144,21 @@ export default async function handler(req: any, res: any) {
         success: true,
         logs: logs,
         videoUrl: videoAsset.video_url,
-        uploadId: uploadResult.video_id
+        uploadId: (uploadResult as any).video_id
     };
 
     return res.status(200).json(result);
 
   } catch (error: any) {
-    console.error("Pipeline Failed:", error);
-    log(`❌ Error: ${error.message}`);
-    return res.status(500).json({ 
+    console.error("CRITICAL PIPELINE FAILURE:", error);
+    log(`❌ Fatal Error: ${error.message}`);
+    
+    // Ensure we return 200 with error details so frontend can display logs instead of generic 500
+    return res.status(200).json({ 
         success: false, 
         logs, 
-        error: error.message 
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }
