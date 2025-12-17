@@ -1,0 +1,35 @@
+[
+  {
+    "id": "gen_001",
+    "subject_type": "Hydraulic Press",
+    "action_verb": "Crush",
+    "object_type": "Gummy Bear Army",
+    "structure_type": "Experiment",
+    "algorithm_signals": ["satisfying", "oddly satisfying", "destruction"],
+    "rationale": "Combines high-frequency 'crush' verb with viral object 'gummy bear'.",
+    "total_score": 0,
+    "selected": false
+  },
+  {
+    "id": "gen_002",
+    "subject_type": "Hot Knife",
+    "action_verb": "Slice",
+    "object_type": "Frozen Smartphone",
+    "structure_type": "ASMR",
+    "algorithm_signals": ["satisfying", "asmr", "tech destruction"],
+    "rationale": "Leverages the 'hot knife' vs 'tech' contrast which performs well in ASMR niche.",
+    "total_score": 0,
+    "selected": false
+  },
+  {
+    "id": "gen_003",
+    "subject_type": "Hydraulic Press",
+    "action_verb": "Crush",
+    "object_type": "Diamond (Fake)",
+    "structure_type": "Experiment",
+    "algorithm_signals": ["satisfying", "pressure", "fail"],
+    "rationale": "Classic 'will it break' trope utilizing the high-value object signal.",
+    "total_score": 0,
+    "selected": false
+  }
+]

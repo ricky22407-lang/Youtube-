@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CandidateThemeGenerator Input",
+  "description": "Trend signals extracted from Shorts data.",
+  "type": "object",
+  "properties": {
+    "action_verb_frequency": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "subject_type_frequency": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "object_type_frequency": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "structure_type_frequency": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "algorithm_signal_frequency": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    }
+  },
+  "required": [
+    "action_verb_frequency",
+    "subject_type_frequency",
+    "object_type_frequency",
+    "structure_type_frequency",
+    "algorithm_signal_frequency"
+  ]
+}

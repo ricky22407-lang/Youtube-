@@ -1,0 +1,24 @@
+{
+  "action_verb_frequency": {
+    "crush": 5,
+    "freeze": 2,
+    "slice": 3
+  },
+  "subject_type_frequency": {
+    "hydraulic press": 5,
+    "hot knife": 3
+  },
+  "object_type_frequency": {
+    "diamond": 2,
+    "smartphone": 4,
+    "gummy bear": 6
+  },
+  "structure_type_frequency": {
+    "experiment": 8,
+    "asmr": 5
+  },
+  "algorithm_signal_frequency": {
+    "satisfying": 10,
+    "oddly satisfying": 7
+  }
+}
