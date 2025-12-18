@@ -56,11 +56,10 @@ export const generateVideo = async (prompt: string): Promise<string> => {
 
   const ai = new GoogleGenAI({ apiKey });
 
-  console.log(`[Veo] Starting generation. Model: ${videoModelId}`);
-  console.log(`[Veo] Key Status: ${apiKey.substring(0, 4)}... (Check permissions & billing)`);
+  console.log(`[Veo System v2.0.4] Starting generation. Model: ${videoModelId}`);
+  console.log(`[Veo] Key Status: ${apiKey.substring(0, 4)}...`);
 
   // Vercel Hobby limits functions to 10s (sometimes 60s). Veo takes longer.
-  // We add a safety timeout to fail gracefully instead of hard crashing the function.
   const TIMEOUT_MS = 55000; // 55 seconds safety margin
 
   const generatePromise = async () => {
@@ -81,7 +80,7 @@ export const generateVideo = async (prompt: string): Promise<string> => {
       while (!operation.done) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         operation = await ai.operations.getVideosOperation({operation: operation});
-        console.log(`[Veo] Polling state: ${operation.metadata?.state}`);
+        console.log(`[Veo] Polling state: ${operation.metadata?.state || 'processing'}`);
         
         if (operation.error) {
              throw new Error(`Veo Operation Error: ${JSON.stringify(operation.error)}`);
@@ -117,12 +116,10 @@ export const generateVideo = async (prompt: string): Promise<string> => {
 
     } catch (error: any) {
       console.error("Gemini API Error (Video):", error);
-      // Propagate the full error message
       throw new Error(`Veo API Failure: ${error.message || JSON.stringify(error)}`);
     }
   };
 
-  // Race between Generation and Timeout
   return Promise.race([
     generatePromise(),
     new Promise<string>((_, reject) => 
