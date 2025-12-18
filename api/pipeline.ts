@@ -8,9 +8,8 @@ import { VideoGenerator } from '../modules/VideoGenerator';
 import { UploaderScheduler } from '../modules/UploaderScheduler';
 import { ChannelConfig, PipelineResult, ShortsData } from '../types';
 
-// Vercel Serverless Config
 export const config = {
-  maxDuration: 60, // Try to extend execution time for Veo
+  maxDuration: 60, 
 };
 
 export default async function handler(req: any, res: any) {
@@ -22,137 +21,108 @@ export default async function handler(req: any, res: any) {
   };
 
   try {
-    // 1. Method Validation
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method Not Allowed' });
-    }
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-    log("Request Received");
-
-    // 2. Early Environment Check
     const apiKey = process.env.API_KEY;
-    const hasClientId = !!process.env.GOOGLE_CLIENT_ID;
-    
-    if (!apiKey) {
-      log("❌ CRITICAL: API_KEY environment variable is missing on server.");
-      return res.status(500).json({
-        success: false,
-        logs,
-        error: "Server Configuration Error: API_KEY is missing."
-      });
-    }
+    if (!apiKey) throw new Error("CRITICAL: API_KEY is missing on server.");
 
-    // 3. Body Parsing
-    let body;
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { channelConfig } = body as { channelConfig: ChannelConfig };
+    
+    if (!channelConfig) throw new Error("Missing channelConfig.");
+
+    // Stage 1: Trends
+    let shortsData: ShortsData[];
     try {
-        body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    } catch (e) {
-        return res.status(400).json({ success: false, logs, error: "Invalid JSON body." });
-    }
-
-    const { channelConfig, forceMock } = body as { channelConfig: ChannelConfig, forceMock?: boolean };
-    
-    if (!channelConfig) {
-        return res.status(400).json({ success: false, logs, error: "Missing channelConfig." });
-    }
-    
-    log(`🚀 Automation Start: ${channelConfig.name}`);
-
-    // --- Step 0: Trend Search (Real or Mock) ---
-    const searcher = new TrendSearcher();
-    let shortsData: ShortsData[] = [];
-    
-    try {
-        const canSearchReal = hasClientId && channelConfig.auth;
-        if (forceMock || !canSearchReal) {
-            log("⚠️ Using Simulated Trend Data (Auth Missing or ForceMock).");
-            shortsData = (searcher as any).getMockData();
-        } else {
-            log("🔍 Fetching Real YouTube Trends...");
-            shortsData = await searcher.execute(channelConfig);
-        }
+        log("Phase: TRENDS - Fetching YouTube Data...");
+        const searcher = new TrendSearcher();
+        shortsData = await searcher.execute(channelConfig);
     } catch (e: any) {
-        log(`⚠️ Trend Search error, using fallback. (${e.message})`);
-        shortsData = (searcher as any).getMockData();
+        throw new Error(`[TRENDS_STAGE] Failed to fetch YouTube trends: ${e.message}`);
     }
-    
-    if (!shortsData || shortsData.length === 0) {
-        throw new Error("Trend module returned no data.");
+
+    // Stage 2: Extraction
+    let signals;
+    try {
+        log("Phase: ANALYSIS - Extracting Signals...");
+        const extractor = new TrendSignalExtractor();
+        signals = await extractor.execute(shortsData);
+    } catch (e: any) {
+        throw new Error(`[SIGNALS_STAGE] Gemini extraction failed: ${e.message}`);
     }
-    log(`✅ Trends Ready: ${shortsData.length} entries`);
 
-    // --- Step 1: Extract Signals ---
-    const extractor = new TrendSignalExtractor();
-    const trendSignals = await extractor.execute(shortsData);
-    log("✅ Signals Extracted");
+    // Stage 3: Generation
+    let candidates;
+    try {
+        log("Phase: CREATIVE - Generating Themes...");
+        const candidateGen = new CandidateThemeGenerator();
+        candidates = await candidateGen.execute(signals);
+    } catch (e: any) {
+        throw new Error(`[THEMES_STAGE] Creative generation failed: ${e.message}`);
+    }
 
-    // --- Step 2: Generate Candidates ---
-    const candidateGen = new CandidateThemeGenerator();
-    const candidates = await candidateGen.execute(trendSignals);
-    log(`✅ Candidates Brainstormed: ${candidates.length}`);
+    // Stage 4: Evaluation
+    let winner;
+    try {
+        log("Phase: WEIGHT - Selecting Concept...");
+        const weightEngine = new CandidateWeightEngine();
+        const scored = await weightEngine.execute({
+            candidates,
+            channelState: channelConfig.channelState
+        });
+        winner = scored.find(c => c.selected);
+        if (!winner) throw new Error("Selection logic error.");
+    } catch (e: any) {
+        throw new Error(`[WEIGHT_STAGE] Algorithm scoring failed: ${e.message}`);
+    }
 
-    // --- Step 3: Weight & Select ---
-    const weightEngine = new CandidateWeightEngine();
-    const scoredCandidates = await weightEngine.execute({
-        candidates,
-        channelState: channelConfig.channelState
-    });
-    const winner = scoredCandidates.find(c => c.selected);
-    if (!winner) throw new Error("Selection logic failed.");
-    log(`✅ Concept Selected: ${winner.id} (Score: ${winner.total_score})`);
+    // Stage 5: Prompting
+    let prompt;
+    try {
+        log("Phase: PROMPT - Composing Assets...");
+        const composer = new PromptComposer();
+        prompt = await composer.execute(winner);
+    } catch (e: any) {
+        throw new Error(`[PROMPT_STAGE] Prompt composition failed: ${e.message}`);
+    }
 
-    // --- Step 4: Compose Prompt ---
-    const composer = new PromptComposer();
-    const promptOutput = await composer.execute(winner);
-    log("✅ Prompt Composed");
-
-    // --- Step 5: Generate Video (Veo) ---
-    const videoGen = new VideoGenerator();
+    // Stage 6: Video (Veo)
     let videoAsset;
     try {
-        log("🎬 Generating Veo 9:16 Video (This usually takes 30-50s)...");
-        videoAsset = await videoGen.execute(promptOutput);
-        log("✅ Video Asset Generated");
+        log("Phase: VEO - Generating Video (Long Request)...");
+        const videoGen = new VideoGenerator();
+        videoAsset = await videoGen.execute(prompt);
     } catch (e: any) {
-        log(`❌ Veo Error: ${e.message}`);
-        // Bubble up as critical error
-        throw new Error(`Veo Generation Failed: ${e.message}`);
+        throw new Error(`[VEO_STAGE] Video generation failed (Check API Quota/Billing): ${e.message}`);
     }
 
-    // --- Step 6: Upload to YouTube ---
-    const uploader = new UploaderScheduler();
-    const uploadInput = {
-        video_asset: videoAsset,
-        metadata: promptOutput,
-        schedule: channelConfig.schedule,
-        authCredentials: channelConfig.auth || undefined
-    };
-
+    // Stage 7: Upload
     let uploadResult;
     try {
-        log("📤 Uploading to YouTube...");
-        uploadResult = await uploader.execute(uploadInput);
-        log(`✅ Final Status: ${uploadResult.status}`);
+        log("Phase: UPLOAD - Publishing to YouTube...");
+        const uploader = new UploaderScheduler();
+        uploadResult = await uploader.execute({
+            video_asset: videoAsset,
+            metadata: prompt,
+            schedule: channelConfig.schedule,
+            authCredentials: channelConfig.auth || undefined
+        });
     } catch (e: any) {
-         log(`⚠️ Upload logic error: ${e.message}`);
-         uploadResult = { status: 'failed', platform_url: '', video_id: '', uploaded_at: new Date().toISOString() };
+        throw new Error(`[UPLOAD_STAGE] YouTube API upload failed: ${e.message}`);
     }
     
-    const result: PipelineResult = {
+    return res.status(200).json({
         success: true,
         logs: logs,
         videoUrl: videoAsset.video_url,
         uploadId: (uploadResult as any).video_id
-    };
-
-    return res.status(200).json(result);
+    });
 
   } catch (error: any) {
-    console.error("PIPELINE_CRASH:", error);
-    return res.status(200).json({ 
+    return res.status(500).json({ 
         success: false, 
         logs: logs, 
-        error: error.message || "An unexpected server error occurred during the pipeline execution."
+        error: error.message || "Unknown Server Error"
     });
   }
 }

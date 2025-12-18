@@ -1,6 +1,4 @@
 
-// Domain Types
-
 export interface ShortsData {
   id: string;
   title: string;
@@ -52,7 +50,7 @@ export interface PromptOutput {
 
 export interface VideoAsset {
   candidate_id: string;
-  video_url: string; // Blob URL (Frontend) or Data URI (Backend)
+  video_url: string;
   mime_type: string;
   status: 'generated' | 'failed';
   generated_at: string;
@@ -60,7 +58,7 @@ export interface VideoAsset {
 
 export interface ScheduleConfig {
   active: boolean;
-  cron_expression?: string; // e.g., "0 9 * * *"
+  cron_expression?: string;
   privacy_status: 'private' | 'public' | 'unlisted';
   publish_at?: string;
 }
@@ -73,18 +71,18 @@ export interface AuthCredentials {
   expiry_date?: number;
 }
 
-// --- Multi-Channel Configuration ---
-
 export interface ChannelConfig {
   id: string;
   name: string;
-  regionCode: string; // e.g., 'US', 'TW', 'JP'
-  searchKeywords: string[]; // e.g., ['AI', 'Tech', 'Coding']
+  regionCode: string;
+  searchKeywords: string[];
   channelState: ChannelState;
   schedule: ScheduleConfig;
   auth: AuthCredentials | null;
   lastRun?: string;
   status: 'idle' | 'running' | 'error' | 'success';
+  currentStep?: number; // 0-6
+  stepLabel?: string;
 }
 
 export interface LogEntry {
@@ -94,9 +92,8 @@ export interface LogEntry {
   channelName: string;
   level: 'info' | 'success' | 'error';
   message: string;
+  phase?: string; // e.g., "TRENDS", "VEO", "UPLOAD"
 }
-
-// --- API Interactions ---
 
 export interface UploaderInput {
   video_asset: VideoAsset;
@@ -114,11 +111,6 @@ export interface UploadResult {
   uploaded_at: string;
 }
 
-export interface PipelineInput {
-  channelConfig: ChannelConfig;
-  forceMock?: boolean; // For testing without burning quota
-}
-
 export interface PipelineResult {
   success: boolean;
   logs: string[];
@@ -127,12 +119,18 @@ export interface PipelineResult {
   error?: string;
 }
 
-export interface IModule<Input, Output> {
+/**
+ * Interface for pipeline modules.
+ */
+export interface IModule<TInput, TOutput> {
   name: string;
   description: string;
-  execute(input: Input): Promise<Output>;
+  execute(input: TInput): Promise<TOutput>;
 }
 
+/**
+ * Interface for module unit test results.
+ */
 export interface TestResult {
   moduleName: string;
   passed: boolean;
