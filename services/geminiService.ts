@@ -2,23 +2,23 @@
 import { GoogleGenAI } from "@google/genai";
 import { Buffer } from 'buffer';
 
-// Updated model names as per latest guidelines
-// For complex text tasks (reasoning, prompt composition), use gemini-3-pro-preview
 const textModelId = "gemini-3-pro-preview";
 const videoModelId = "veo-3.1-fast-generate-preview";
 
+/**
+ * 核心 JSON 生成服務
+ */
 export const generateJSON = async <T>(
   prompt: string,
   systemInstruction: string,
   responseSchema?: any
 ): Promise<T> => {
-  // Always obtain API key directly from process.env.API_KEY
+  // 嚴格從環境變數獲取，這在伺服器端是必須的
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    throw new Error("API Key Missing. Please ensure an API key is selected.");
+    throw new Error("Gemini API Key 缺失。請於 Vercel 環境變數中設定 API_KEY。");
   }
 
-  // Create a new GoogleGenAI instance right before the call
   const ai = new GoogleGenAI({ apiKey });
 
   try {
@@ -29,77 +29,73 @@ export const generateJSON = async <T>(
         systemInstruction: systemInstruction,
         responseMimeType: "application/json",
         responseSchema: responseSchema,
-        temperature: 0.2, 
+        temperature: 0.1, // 降低隨機性以確保符合 Schema
       },
     });
 
-    // Access .text property directly (do not call as method)
     const text = response.text;
     if (!text) {
-      throw new Error("No text returned from Gemini.");
+      throw new Error("Gemini 回傳了空的內容。");
     }
 
-    return JSON.parse(text) as T;
+    // 防禦性 JSON 解析
+    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanText) as T;
   } catch (error: any) {
-    console.error("Gemini API Error (Text):", error);
-    throw new Error(`Text Gen Failed: ${error.message}`);
+    console.error("[Gemini Text Engine Error]:", error);
+    throw new Error(`AI 推理失敗: ${error.message}`);
   }
 };
 
+/**
+ * Veo 3.1 影片生成服務 (垂直 9:16)
+ */
 export const generateVideo = async (prompt: string): Promise<string> => {
-  // Always obtain API key directly from process.env.API_KEY
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    throw new Error("API Key Missing for Video Generation.");
+    throw new Error("影片生成核心缺失 API_KEY。");
   }
 
-  // Create a new GoogleGenAI instance right before the call
   const ai = new GoogleGenAI({ apiKey });
+  const MAX_POLLING_ATTEMPTS = 15; // 約 150 秒
 
-  const TIMEOUT_MS = 110000; // Extend timeout for video generation
-
-  const generatePromise = async () => {
-    try {
-      let operation = await ai.models.generateVideos({
-        model: videoModelId,
-        prompt: prompt,
-        config: {
-          numberOfVideos: 1,
-          resolution: '720p',
-          aspectRatio: '9:16'
-        }
-      });
-
-      while (!operation.done) {
-        // Wait for 10 seconds before polling again
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        operation = await ai.operations.getVideosOperation({operation: operation});
+  try {
+    let operation = await ai.models.generateVideos({
+      model: videoModelId,
+      prompt: prompt,
+      config: {
+        numberOfVideos: 1,
+        resolution: '720p',
+        aspectRatio: '9:16'
       }
+    });
 
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (!downloadLink) {
-        throw new Error("Veo returned no video URI.");
-      }
-
-      // Append API key when fetching from the download link as per guidelines
-      const response = await fetch(`${downloadLink}&key=${apiKey}`);
-      if (!response.ok) throw new Error("Failed to download video bytes.");
-
-      const arrayBuffer = await response.arrayBuffer();
-      const base64 = Buffer.from(arrayBuffer).toString('base64');
-      
-      return `data:video/mp4;base64,${base64}`;
-
-    } catch (error: any) {
-      console.error("Gemini API Error (Video):", error);
-      throw new Error(`Veo API Failure: ${error.message}`);
+    let attempts = 0;
+    while (!operation.done && attempts < MAX_POLLING_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      operation = await ai.operations.getVideosOperation({operation: operation});
+      attempts++;
     }
-  };
 
-  return Promise.race([
-    generatePromise(),
-    new Promise<string>((_, reject) => 
-        setTimeout(() => reject(new Error("Video Generation Timed Out.")), TIMEOUT_MS)
-    )
-  ]);
+    if (!operation.done) {
+        throw new Error("影片渲染超時，伺服器已釋放連線。");
+    }
+
+    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+    if (!downloadLink) {
+      throw new Error("Veo 渲染引擎未回傳有效的影片 URI。");
+    }
+
+    const response = await fetch(`${downloadLink}&key=${apiKey}`);
+    if (!response.ok) throw new Error("無法從渲染中心下載影片數據。");
+
+    const arrayBuffer = await response.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    
+    return `data:video/mp4;base64,${base64}`;
+
+  } catch (error: any) {
+    console.error("[Veo Engine Error]:", error);
+    throw new Error(`影片製作失敗: ${error.message}`);
+  }
 };
