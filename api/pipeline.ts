@@ -20,109 +20,122 @@ export default async function handler(req: any, res: any) {
     logs.push(msg);
   };
 
+  let capturedTrends: ShortsData[] = [];
+  let capturedWinner: any = null;
+  let capturedMetadata: any = null;
+
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
     const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("CRITICAL: API_KEY is missing on server.");
+    if (!apiKey) throw new Error("Phase: CRITICAL - Server environment variable API_KEY is missing.");
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const { channelConfig } = body as { channelConfig: ChannelConfig };
     
-    if (!channelConfig) throw new Error("Missing channelConfig.");
+    if (!channelConfig) throw new Error("Phase: START - Missing channelConfig in request body.");
 
     // Stage 1: Trends
-    let shortsData: ShortsData[];
     try {
-        log("Phase: TRENDS - Fetching YouTube Data...");
+        log("Phase: TRENDS - 正在利用 YouTube Data API 抓取該地區熱門 Shorts...");
         const searcher = new TrendSearcher();
-        shortsData = await searcher.execute(channelConfig);
+        capturedTrends = await searcher.execute(channelConfig);
+        log(`Phase: TRENDS - 成功取得 ${capturedTrends.length} 部熱門影片數據。`);
     } catch (e: any) {
-        throw new Error(`[TRENDS_STAGE] Failed to fetch YouTube trends: ${e.message}`);
+        throw new Error(`[TRENDS_ERROR] 趨勢抓取失敗: ${e.message}`);
     }
 
     // Stage 2: Extraction
     let signals;
     try {
-        log("Phase: ANALYSIS - Extracting Signals...");
+        log("Phase: ANALYSIS - 正在交由 Gemini 解析觀看增長與標籤訊號...");
         const extractor = new TrendSignalExtractor();
-        signals = await extractor.execute(shortsData);
+        signals = await extractor.execute(capturedTrends);
+        log("Phase: ANALYSIS - 訊號解析完成。");
     } catch (e: any) {
-        throw new Error(`[SIGNALS_STAGE] Gemini extraction failed: ${e.message}`);
+        throw new Error(`[ANALYSIS_ERROR] Gemini 訊號提取失敗: ${e.message}`);
     }
 
     // Stage 3: Generation
     let candidates;
     try {
-        log("Phase: CREATIVE - Generating Themes...");
+        log("Phase: CREATIVE - 正在生成 3 個候選創意主題...");
         const candidateGen = new CandidateThemeGenerator();
         candidates = await candidateGen.execute(signals);
+        log("Phase: CREATIVE - 主題發想完成。");
     } catch (e: any) {
-        throw new Error(`[THEMES_STAGE] Creative generation failed: ${e.message}`);
+        throw new Error(`[THEMES_ERROR] 創意生成失敗: ${e.message}`);
     }
 
     // Stage 4: Evaluation
-    let winner;
     try {
-        log("Phase: WEIGHT - Selecting Concept...");
+        log("Phase: WEIGHT - 正在執行演算法權重評分與主軸媒合...");
         const weightEngine = new CandidateWeightEngine();
         const scored = await weightEngine.execute({
             candidates,
             channelState: channelConfig.channelState
         });
-        winner = scored.find(c => c.selected);
-        if (!winner) throw new Error("Selection logic error.");
+        capturedWinner = scored.find(c => c.selected);
+        if (!capturedWinner) throw new Error("權重引擎未選出適合的影片主題。");
+        log(`Phase: WEIGHT - 選定主題：${capturedWinner.subject_type} (得分: ${capturedWinner.total_score})`);
     } catch (e: any) {
-        throw new Error(`[WEIGHT_STAGE] Algorithm scoring failed: ${e.message}`);
+        throw new Error(`[WEIGHT_ERROR] 權重分析失敗: ${e.message}`);
     }
 
     // Stage 5: Prompting
-    let prompt;
     try {
-        log("Phase: PROMPT - Composing Assets...");
+        log("Phase: PROMPT - 正在編排 Veo 專用 Prompt 與 YouTube Metadata...");
         const composer = new PromptComposer();
-        prompt = await composer.execute(winner);
+        capturedMetadata = await composer.execute(capturedWinner);
+        log("Phase: PROMPT - 腳本編排完成。");
     } catch (e: any) {
-        throw new Error(`[PROMPT_STAGE] Prompt composition failed: ${e.message}`);
+        throw new Error(`[PROMPT_ERROR] Prompt 編排失敗: ${e.message}`);
     }
 
     // Stage 6: Video (Veo)
     let videoAsset;
     try {
-        log("Phase: VEO - Generating Video (Long Request)...");
+        log("Phase: VEO - 正在啟動 Veo 3.1 影片生成流程 (長延時操作)...");
         const videoGen = new VideoGenerator();
-        videoAsset = await videoGen.execute(prompt);
+        videoAsset = await videoGen.execute(capturedMetadata);
+        log("Phase: VEO - 影片生成成功。");
     } catch (e: any) {
-        throw new Error(`[VEO_STAGE] Video generation failed (Check API Quota/Billing): ${e.message}`);
+        throw new Error(`[VEO_ERROR] Veo 3.1 API 生成失敗: ${e.message}`);
     }
 
     // Stage 7: Upload
     let uploadResult;
     try {
-        log("Phase: UPLOAD - Publishing to YouTube...");
+        log("Phase: UPLOAD - 正在透過使用者授權上傳至 YouTube...");
         const uploader = new UploaderScheduler();
         uploadResult = await uploader.execute({
             video_asset: videoAsset,
-            metadata: prompt,
+            metadata: capturedMetadata,
             schedule: channelConfig.schedule,
             authCredentials: channelConfig.auth || undefined
         });
+        log(`Phase: UPLOAD - 上傳成功！影片 ID: ${(uploadResult as any).video_id}`);
     } catch (e: any) {
-        throw new Error(`[UPLOAD_STAGE] YouTube API upload failed: ${e.message}`);
+        throw new Error(`[UPLOAD_ERROR] YouTube 上傳失敗: ${e.message}`);
     }
     
     return res.status(200).json({
         success: true,
         logs: logs,
         videoUrl: videoAsset.video_url,
-        uploadId: (uploadResult as any).video_id
+        uploadId: (uploadResult as any).video_id,
+        trends: capturedTrends,
+        winner: capturedWinner,
+        metadata: capturedMetadata
     });
 
   } catch (error: any) {
     return res.status(500).json({ 
         success: false, 
         logs: logs, 
-        error: error.message || "Unknown Server Error"
+        error: error.message || "伺服器內部錯誤",
+        trends: capturedTrends,
+        winner: capturedWinner
     });
   }
 }

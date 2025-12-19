@@ -71,30 +71,7 @@ export interface AuthCredentials {
   expiry_date?: number;
 }
 
-export interface ChannelConfig {
-  id: string;
-  name: string;
-  regionCode: string;
-  searchKeywords: string[];
-  channelState: ChannelState;
-  schedule: ScheduleConfig;
-  auth: AuthCredentials | null;
-  lastRun?: string;
-  status: 'idle' | 'running' | 'error' | 'success';
-  currentStep?: number; // 0-6
-  stepLabel?: string;
-}
-
-export interface LogEntry {
-  id: string;
-  timestamp: string;
-  channelId: string;
-  channelName: string;
-  level: 'info' | 'success' | 'error';
-  message: string;
-  phase?: string; // e.g., "TRENDS", "VEO", "UPLOAD"
-}
-
+// Fix: Added missing UploaderInput and UploadResult interfaces used by UploaderScheduler module
 export interface UploaderInput {
   video_asset: VideoAsset;
   metadata: PromptOutput;
@@ -106,9 +83,38 @@ export interface UploadResult {
   platform: string;
   video_id: string;
   platform_url: string;
-  status: 'uploaded' | 'scheduled' | 'failed';
+  status: 'uploaded' | 'scheduled';
   scheduled_for?: string;
   uploaded_at: string;
+}
+
+export interface ChannelConfig {
+  id: string;
+  name: string;
+  regionCode: string;
+  searchKeywords: string[];
+  channelState: ChannelState;
+  schedule: ScheduleConfig;
+  auth: AuthCredentials | null;
+  lastRun?: string;
+  status: 'idle' | 'running' | 'error' | 'success';
+  currentStep?: number;
+  stepLabel?: string;
+  results?: {
+    trends?: ShortsData[];
+    winner?: CandidateTheme;
+    metadata?: PromptOutput;
+  };
+}
+
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  channelId: string;
+  channelName: string;
+  level: 'info' | 'success' | 'error';
+  message: string;
+  phase?: string;
 }
 
 export interface PipelineResult {
@@ -117,20 +123,18 @@ export interface PipelineResult {
   videoUrl?: string;
   uploadId?: string;
   error?: string;
+  // New fields for intermediate reporting
+  trends?: ShortsData[];
+  winner?: CandidateTheme;
+  metadata?: PromptOutput;
 }
 
-/**
- * Interface for pipeline modules.
- */
 export interface IModule<TInput, TOutput> {
   name: string;
   description: string;
   execute(input: TInput): Promise<TOutput>;
 }
 
-/**
- * Interface for module unit test results.
- */
 export interface TestResult {
   moduleName: string;
   passed: boolean;
