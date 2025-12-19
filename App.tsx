@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Component, ReactNode } from 'react';
 import { 
   ChannelConfig, LogEntry, PipelineResult 
 } from './types';
@@ -12,7 +12,7 @@ const PIPELINE_STEPS = [
 
 // Define interfaces for ErrorBoundary props and state
 interface ErrorBoundaryProps {
-  children?: React.ReactNode;
+  children?: ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -20,19 +20,17 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  // Fix: Explicitly define state and initialize in constructor
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
+// Fix: Explicitly inherit from Component and handle state to resolve property access errors in class component
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  // Fix: Initializing state via property initializer to ensure 'state' property is recognized by compiler
+  state: ErrorBoundaryState = { hasError: false, error: null };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState { 
     return { hasError: true, error }; 
   }
 
   render() {
-    // Fix: Access state and props using 'this'
+    // Fix: Access state via this.state
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-slate-950 flex items-center justify-center p-12 font-mono">
@@ -46,6 +44,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
         </div>
       );
     }
+    // Fix: Access props via this.props
     return this.props.children;
   }
 }

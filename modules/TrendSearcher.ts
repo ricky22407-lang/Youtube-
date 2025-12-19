@@ -10,12 +10,13 @@ export class TrendSearcher implements IModule<ChannelConfig, ShortsData[]> {
     if (typeof window !== 'undefined') return this.getMockData();
 
     try {
+        // 動態載入巨大套件以提升效能
         const { google } = await import('googleapis');
         const clientId = process.env.GOOGLE_CLIENT_ID;
         const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
         if (!clientId || !config.auth) {
-            console.warn("[TrendSearcher] 未配置 OAuth，使用模擬趨勢。");
+            console.warn("[TrendSearcher] 未配置 OAuth 或無授權資訊，使用模擬趨勢。");
             return this.getMockData();
         }
 
@@ -25,7 +26,7 @@ export class TrendSearcher implements IModule<ChannelConfig, ShortsData[]> {
 
         const searchRes = await service.search.list({
             part: ['snippet'],
-            q: `#shorts ${config.searchKeywords[0] || 'AI'}`,
+            q: `#shorts ${config.searchKeywords?.[0] || 'AI'}`,
             type: ['video'],
             regionCode: config.regionCode || 'TW',
             maxResults: 8,
@@ -52,7 +53,7 @@ export class TrendSearcher implements IModule<ChannelConfig, ShortsData[]> {
         }));
 
     } catch (e: any) {
-        console.error("[TrendSearcher] API 失敗:", e.message);
+        console.error("[TrendSearcher] API 失敗 (回退至模擬數據):", e.message);
         return this.getMockData();
     }
   }
