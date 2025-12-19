@@ -2,7 +2,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { Buffer } from 'buffer';
 
-const textModelId = "gemini-3-pro-preview";
+// 改用 Flash 模型以極速完成前置分析
+const textModelId = "gemini-3-flash-preview";
 const videoModelId = "veo-3.1-fast-generate-preview";
 
 /**
@@ -13,10 +14,10 @@ export const generateJSON = async <T>(
   systemInstruction: string,
   responseSchema?: any
 ): Promise<T> => {
-  // 嚴格從環境變數獲取，這在伺服器端是必須的
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    throw new Error("Gemini API Key 缺失。請於 Vercel 環境變數中設定 API_KEY。");
+    console.error("[CRITICAL] API_KEY environment variable is UNDEFINED.");
+    throw new Error("系統偵測不到 API_KEY。請檢查 Vercel Dashboard 並確保已完成 Redeploy。");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -29,21 +30,18 @@ export const generateJSON = async <T>(
         systemInstruction: systemInstruction,
         responseMimeType: "application/json",
         responseSchema: responseSchema,
-        temperature: 0.1, // 降低隨機性以確保符合 Schema
+        temperature: 0.1,
       },
     });
 
     const text = response.text;
-    if (!text) {
-      throw new Error("Gemini 回傳了空的內容。");
-    }
+    if (!text) throw new Error("Gemini 回傳內容為空。");
 
-    // 防禦性 JSON 解析
     const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
     return JSON.parse(cleanText) as T;
   } catch (error: any) {
-    console.error("[Gemini Text Engine Error]:", error);
-    throw new Error(`AI 推理失敗: ${error.message}`);
+    console.error("[Gemini Service Error]:", error);
+    throw new Error(`AI 推理階段故障: ${error.message}`);
   }
 };
 
@@ -52,12 +50,12 @@ export const generateJSON = async <T>(
  */
 export const generateVideo = async (prompt: string): Promise<string> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("影片生成核心缺失 API_KEY。");
-  }
+  if (!apiKey) throw new Error("影片引擎缺失 API_KEY。");
 
   const ai = new GoogleGenAI({ apiKey });
-  const MAX_POLLING_ATTEMPTS = 15; // 約 150 秒
+  
+  // 縮短內部輪詢間隔，並在達到 Vercel 超時邊緣前強行拋出錯誤
+  const MAX_POLLING_ATTEMPTS = 12; // 12 * 5s = 60s
 
   try {
     let operation = await ai.models.generateVideos({
@@ -72,30 +70,26 @@ export const generateVideo = async (prompt: string): Promise<string> => {
 
     let attempts = 0;
     while (!operation.done && attempts < MAX_POLLING_ATTEMPTS) {
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
       operation = await ai.operations.getVideosOperation({operation: operation});
       attempts++;
     }
 
     if (!operation.done) {
-        throw new Error("影片渲染超時，伺服器已釋放連線。");
+        throw new Error("Veo 渲染任務超出了伺服器單次請求時限。請重試。");
     }
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) {
-      throw new Error("Veo 渲染引擎未回傳有效的影片 URI。");
-    }
+    if (!downloadLink) throw new Error("Veo 引擎未能生成有效的影片下載點。");
 
     const response = await fetch(`${downloadLink}&key=${apiKey}`);
-    if (!response.ok) throw new Error("無法從渲染中心下載影片數據。");
+    if (!response.ok) throw new Error("從 Google 存儲下載影片位元組失敗。");
 
     const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-    
-    return `data:video/mp4;base64,${base64}`;
+    return `data:video/mp4;base64,${Buffer.from(arrayBuffer).toString('base64')}`;
 
   } catch (error: any) {
     console.error("[Veo Engine Error]:", error);
-    throw new Error(`影片製作失敗: ${error.message}`);
+    throw new Error(`Veo 渲染失敗: ${error.message}`);
   }
 };
