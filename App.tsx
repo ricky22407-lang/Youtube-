@@ -37,9 +37,22 @@ const App: React.FC = () => {
     if (isFirebaseConfigured && db) {
       addLog("系統連線：Firebase 雲端同步模式。");
       
+      // 確保 system/status 文件存在，如果不存在則初始化 (解決第一次顯示 Offline 的問題)
+      initializeSystemStatus();
+
       // 監聽全局引擎狀態
-      onSnapshot(doc(db, "system", "status"), (doc) => {
-        if (doc.exists()) setSystemStatus(doc.data() as SystemStatus);
+      onSnapshot(doc(db, "system", "status"), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          // 處理 Firebase Timestamp 轉為 JS Number
+          const lastHeartbeat = data.lastHeartbeat?.toMillis ? data.lastHeartbeat.toMillis() : (data.lastHeartbeat || 0);
+          setSystemStatus({
+            ...data,
+            lastHeartbeat
+          } as SystemStatus);
+        } else {
+          addLog("⚠️ 警告：找不到雲端引擎狀態文件，請確保 Firebase Functions 已部署。");
+        }
       });
 
       // 監聽頻道列表
@@ -55,6 +68,20 @@ const App: React.FC = () => {
       if (saved) setChannels(JSON.parse(saved));
     }
   }, []);
+
+  const initializeSystemStatus = async () => {
+    if (!db) return;
+    const statusRef = doc(db, "system", "status");
+    const snap = await getDoc(statusRef);
+    if (!snap.exists()) {
+      addLog("正在初始化雲端監測文件...");
+      await setDoc(statusRef, {
+        lastHeartbeat: Date.now(),
+        engineStatus: 'online',
+        activeTasks: 0
+      });
+    }
+  };
 
   const handleAuthCallback = async (code: string) => {
     const pendingId = localStorage.getItem('pilot_v8_pending');
@@ -155,6 +182,8 @@ const App: React.FC = () => {
     }
   };
 
+  const isEnginePulseActive = systemStatus && (Date.now() - systemStatus.lastHeartbeat < 180000); // 3分鐘內有心跳算 Active
+
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 flex flex-col font-sans">
       <nav className="p-6 border-b border-slate-800 bg-slate-900/40 backdrop-blur-2xl sticky top-0 z-50 flex justify-between items-center shadow-2xl">
@@ -167,12 +196,12 @@ const App: React.FC = () => {
                 <div className={`w-1.5 h-1.5 rounded-full ${isFirebaseConfigured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></div>
                 <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">{isFirebaseConfigured ? 'Cloud Brain Link' : 'Local Only'}</span>
               </div>
-              {systemStatus && (
-                <div className="flex items-center gap-1.5 border-l border-slate-800 pl-3">
-                  <div className={`w-1.5 h-1.5 rounded-full ${Date.now() - systemStatus.lastHeartbeat < 120000 ? 'bg-indigo-500 animate-ping' : 'bg-rose-500'}`}></div>
-                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Engine Pulse</span>
-                </div>
-              )}
+              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-3">
+                <div className={`w-1.5 h-1.5 rounded-full ${isEnginePulseActive ? 'bg-indigo-500 animate-ping' : 'bg-rose-500'}`}></div>
+                <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  {isEnginePulseActive ? 'Engine Alive' : 'Engine Offline'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -185,7 +214,7 @@ const App: React.FC = () => {
         <main className="flex-1 p-8 overflow-y-auto">
           <div className="max-w-4xl mx-auto space-y-6">
             {channels.map(c => {
-              const isCloudReady = c.auth && c.schedule?.autoEnabled && c.cloudSynced;
+              const isCloudReady = c.auth && c.schedule?.autoEnabled && c.cloudSynced && isEnginePulseActive;
               return (
                 <div key={c.id} className="bg-slate-900/60 border border-slate-800 rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden group hover:border-indigo-500/40 transition-all duration-500">
                   
@@ -194,7 +223,7 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-2">
                        <div className={`w-2 h-2 rounded-full ${isCloudReady ? 'bg-indigo-500 animate-pulse' : 'bg-slate-700'}`}></div>
                        <span className={`text-[10px] font-black uppercase tracking-widest ${isCloudReady ? 'text-indigo-400' : 'text-slate-600'}`}>
-                         {isCloudReady ? 'Cloud Active' : 'Sync Pending'}
+                         {isCloudReady ? 'Cloud Scheduled' : 'Local Standby'}
                        </span>
                     </div>
                     <div className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border ${c.auth ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
@@ -232,7 +261,7 @@ const App: React.FC = () => {
 
                       <div className="p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
                          <p className={`text-sm font-bold ${c.status === 'running' ? 'text-indigo-400 animate-pulse' : c.status === 'error' ? 'text-rose-400' : 'text-slate-300'}`}>
-                           {c.lastLog || '等待雲端或手動觸發...'}
+                           {c.lastLog || (isEnginePulseActive ? '等待排程時間...' : '⚠️ 請檢查雲端引擎連線')}
                          </p>
                       </div>
                     </div>
@@ -268,8 +297,8 @@ const App: React.FC = () => {
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <span className="text-xs font-bold text-slate-400">連線狀態</span>
-                <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${systemStatus?.engineStatus === 'online' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                  {systemStatus?.engineStatus || 'Offline'}
+                <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${isEnginePulseActive ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                  {isEnginePulseActive ? 'Online' : 'Offline'}
                 </span>
               </div>
               <div className="flex justify-between items-center">
@@ -277,6 +306,11 @@ const App: React.FC = () => {
                 <span className="text-[10px] font-mono text-slate-500">{systemStatus ? new Date(systemStatus.lastHeartbeat).toLocaleTimeString() : '--:--:--'}</span>
               </div>
             </div>
+            {!isEnginePulseActive && isFirebaseConfigured && (
+              <div className="mt-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[9px] text-rose-400 font-bold leading-relaxed">
+                引擎似乎已停止運作。請確保 Firebase Cloud Function `cloudAutoPilotEngine` 已成功部署並設置為定時執行。
+              </div>
+            )}
           </div>
           <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-4 text-center">活動日誌</h3>
           <div className="flex-1 overflow-y-auto space-y-3 font-mono text-[10px]">
