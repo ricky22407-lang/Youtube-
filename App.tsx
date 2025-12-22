@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, Component, ReactNode } from 'react';
+import React, { useState, useEffect, ReactNode } from 'react';
 import { 
   ChannelConfig, LogEntry, PipelineResult 
 } from './types';
@@ -19,9 +19,12 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-// Fix: Use the imported Component class to ensure that TypeScript correctly identifies 'this.props' and 'this.state'
-class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false, error: null };
+// Fix: Use React.Component explicitly to ensure props type inference works correctly on line 44
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState { 
     return { hasError: true, error }; 
@@ -41,7 +44,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
         </div>
       );
     }
-    // Correctly access children from the inherited props property
     return this.props.children;
   }
 }
@@ -149,16 +151,7 @@ const AppContent: React.FC = () => {
         body: JSON.stringify({ stage: 'analyze', channelConfig: channel })
       });
       
-      if (!data1.success) {
-        // 特別處理 API 未啟用錯誤
-        if (data1.error && data1.error.includes("CRITICAL_API_DISABLED")) {
-            addLog(channel.id, channel.name, 'error', "❌ 關鍵錯誤：您的 YouTube API 未在 Google Cloud Console 啟用。", 'CONFIG');
-            addLog(channel.id, channel.name, 'info', "請前往啟用：https://console.cloud.google.com/apis/library/youtube.googleapis.com", 'CONFIG');
-            throw new Error("YouTube API 未啟用");
-        }
-        throw new Error(data1.error || "企劃階段失敗");
-      }
-      
+      if (!data1.success) throw new Error(data1.error || "企劃階段失敗");
       data1.logs?.forEach((l: string) => addLog(channel.id, channel.name, 'info', l, 'ANALYZE'));
 
       updateChannel(channel.id, { currentStep: 1, stepLabel: PIPELINE_STEPS[1].desc });
@@ -176,10 +169,10 @@ const AppContent: React.FC = () => {
       });
       if (!data3.success) throw new Error(data3.error || "發布階段失敗");
       
-      addLog(channel.id, channel.name, 'success', `流程完成！ID: ${data3.uploadId}`, 'FINISH');
+      addLog(channel.id, channel.name, 'success', `流程完成！已同步。`, 'FINISH');
       updateChannel(channel.id, { 
         status: 'success', currentStep: 3, stepLabel: '已完成',
-        results: { trends: data1.trends, winner: data1.winner, metadata: data1.metadata }
+        results: { trends: data1.trends, metadata: data1.metadata }
       });
     } catch (e: any) {
       addLog(channel.id, channel.name, 'error', `管線失敗: ${e.message}`, 'CRITICAL');
@@ -190,29 +183,34 @@ const AppContent: React.FC = () => {
   const runMockAutomation = async (channel: ChannelConfig) => {
     updateChannel(channel.id, { status: 'running', currentStep: 0, stepLabel: "正在模擬趨勢分析..." });
     await new Promise(r => setTimeout(r, 1500));
-    addLog(channel.id, channel.name, 'info', '模擬分析完成：發現熱門寵物短片趨勢。', 'MOCK');
+    addLog(channel.id, channel.name, 'info', '模擬分析完成：發現熱門短片趨勢。', 'MOCK');
     
     updateChannel(channel.id, { currentStep: 1, stepLabel: "正在模擬影片生成 (Veo 渲染)..." });
     await new Promise(r => setTimeout(r, 2000));
-    addLog(channel.id, channel.name, 'info', '模擬渲染完成：生成 9:16 MP4 預覽。', 'MOCK');
+    addLog(channel.id, channel.name, 'info', '模擬渲染完成：生成 9:16 MP4。', 'MOCK');
 
     updateChannel(channel.id, { currentStep: 2, stepLabel: "正在模擬上傳發布..." });
     await new Promise(r => setTimeout(r, 1000));
     addLog(channel.id, channel.name, 'success', '模擬流程圓滿完成！', 'MOCK');
     
-    updateChannel(channel.id, { 
-        status: 'success', currentStep: 3, stepLabel: '模擬完成',
-        results: { winner: { subject_type: '黃金獵犬', action_verb: '跳舞', id: 'm1' } as any }
-    });
+    updateChannel(channel.id, { status: 'success', currentStep: 3, stepLabel: '模擬完成' });
   };
 
   const safeFetch = async (url: string, options: any) => {
-    const res = await fetch(url, options);
-    const text = await res.text();
     try {
+      const res = await fetch(url, options);
+      const text = await res.text();
+      try {
         return JSON.parse(text);
-    } catch (e) {
-        throw new Error(`伺服器回應格式錯誤: ${text.slice(0, 50)}...`);
+      } catch (e) {
+        // 如果是 Vercel 的 500 頁面
+        if (text.includes("FUNCTION_INVOCATION_FAILED")) {
+           return { success: false, error: "伺服器函數執行失敗 (可能原因：逾時、記憶體溢位或依賴衝突)。" };
+        }
+        return { success: false, error: `伺服器回應格式錯誤: ${text.slice(0, 100)}` };
+      }
+    } catch (e: any) {
+      return { success: false, error: `網路通訊失敗: ${e.message}` };
     }
   };
 
@@ -238,10 +236,7 @@ const AppContent: React.FC = () => {
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
         <div className="bg-slate-900 border border-slate-800 p-10 rounded-3xl max-w-md text-center shadow-2xl">
           <h2 className="text-2xl font-bold text-white mb-4 italic">API_KEY_REQUIRED</h2>
-          <p className="text-slate-400 mb-8 text-sm">
-            本應用程式使用 Veo 進行影片生成，您需要先選擇一個已啟用計費的 API 金鑰。
-            請前往 <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-indigo-400 underline">計費文件</a> 瞭解更多資訊。
-          </p>
+          <p className="text-slate-400 mb-8 text-sm">您需要先選擇一個已啟用計費的 API 金鑰以執行全自動化。請點擊下方按鈕進行配置。</p>
           <button 
             onClick={async () => {
               await (window as any).aistudio.openSelectKey();
@@ -251,7 +246,7 @@ const AppContent: React.FC = () => {
             }} 
             className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black hover:bg-indigo-500 transition-all shadow-xl shadow-indigo-900/20"
           >
-            開啟金鑰選擇器
+            配置金鑰
           </button>
         </div>
       </div>
@@ -268,7 +263,6 @@ const AppContent: React.FC = () => {
         <div className="flex items-center gap-4">
           <div className={`hidden md:flex gap-3 text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl border ${sysStatus?.is_mock ? 'bg-amber-900/20 border-amber-700 text-amber-500' : 'bg-slate-800 border-slate-700'}`}>
              <span>MODE: {sysStatus?.is_mock ? "SIMULATED" : "PRODUCTION"}</span>
-             {!sysStatus?.is_mock && <span className={sysStatus?.api_key ? "text-emerald-500" : "text-red-500"}>API: {sysStatus?.api_key ? "OK" : "ERR"}</span>}
           </div>
           <button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>控制台</button>
           <button onClick={() => setActiveTab('logs')} className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === 'logs' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>日誌</button>
@@ -281,7 +275,7 @@ const AppContent: React.FC = () => {
             <div className="flex justify-between items-end bg-slate-900/40 p-10 rounded-[2rem] border border-slate-800/50">
                <div>
                  <h2 className="text-4xl font-black text-white tracking-tight italic uppercase">Shorts Automation</h2>
-                 <p className="text-slate-500 text-sm mt-2">版本 v6.0.2 | {sysStatus?.is_mock ? "目前正以展示模式執行，部分功能僅作模擬。" : "伺服器通訊正常。"}</p>
+                 <p className="text-slate-500 text-sm mt-2">版本 v6.0.3 | 輕量化架構。{sysStatus?.is_mock ? "模擬模式。" : "伺服器通訊正常。"}</p>
                </div>
                <button onClick={() => setIsAdding(true)} className="px-10 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black shadow-xl shadow-indigo-900/30 transition-all">+ 新增頻道</button>
             </div>
@@ -307,7 +301,7 @@ const AppContent: React.FC = () => {
 
             <div className="grid grid-cols-1 gap-6">
               {channels.map(channel => (
-                <div key={channel.id} className="bg-slate-900 border border-slate-800 rounded-[2rem] p-8 hover:border-slate-700 transition-all relative overflow-hidden group">
+                <div key={channel.id} className="bg-slate-900 border border-slate-800 rounded-[2rem] p-8 hover:border-slate-700 transition-all relative overflow-hidden">
                   <div className="flex flex-col lg:flex-row justify-between lg:items-center gap-8 relative z-10">
                     <div className="flex-1">
                        <div className="flex items-center gap-4 mb-4">
@@ -316,7 +310,7 @@ const AppContent: React.FC = () => {
                        </div>
                        <div className="flex gap-4 text-xs font-bold text-slate-500 uppercase italic">
                          <span className="bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">{channel.channelState.niche}</span>
-                         {channel.auth || sysStatus?.is_mock ? <span className="text-emerald-500 self-center">✓ 狀態正常</span> : <span className="text-amber-500 self-center">! 未連動 YouTube</span>}
+                         {channel.auth || sysStatus?.is_mock ? <span className="text-emerald-500 self-center">✓ 已連結</span> : <span className="text-amber-500 self-center">! 未連動 YouTube</span>}
                        </div>
                     </div>
                     <div className="flex gap-4">
@@ -328,7 +322,7 @@ const AppContent: React.FC = () => {
                         </button>
                       )}
                       <button onClick={() => setChannels(channels.filter(c => c.id !== channel.id))} className="p-4 bg-slate-800 hover:bg-red-600 text-slate-500 hover:text-white rounded-2xl transition-all">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 00-16.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 00-16.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1v3M4 7h16" /></svg>
                       </button>
                     </div>
                   </div>
@@ -338,7 +332,6 @@ const AppContent: React.FC = () => {
                       <div className="flex justify-between items-end mb-6">
                          <div className="space-y-1">
                            <span className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                             <span className="w-2 h-2 bg-indigo-500 rounded-full animate-ping"></span>
                              PIPELINE_ACTIVE
                            </span>
                            <h4 className="text-xl font-bold text-white italic">{channel.stepLabel}</h4>
@@ -353,11 +346,7 @@ const AppContent: React.FC = () => {
 
                   {channel.status === 'success' && (
                      <div className="mt-8 p-6 bg-slate-950 rounded-3xl border border-slate-800 animate-slide-down">
-                        <div className="flex items-center justify-between">
-                            <h4 className="text-[10px] font-black text-slate-600 uppercase tracking-widest">最近一次執行結果</h4>
-                            <span className="text-[10px] font-mono text-slate-500">{new Date().toLocaleTimeString()}</span>
-                        </div>
-                        <p className="mt-3 text-emerald-400 font-bold italic text-sm">✅ 影片已生成並完成虛擬上傳。</p>
+                        <p className="text-emerald-400 font-bold italic text-sm">✅ 流程圓滿完成。影片已生成並完成同步。</p>
                      </div>
                   )}
                 </div>
@@ -376,7 +365,7 @@ const AppContent: React.FC = () => {
                   <span className="text-slate-600 shrink-0 opacity-40">[{log.timestamp}]</span>
                   <span className={`shrink-0 px-2 py-0.5 rounded text-[8px] font-black ${log.level === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-500'}`}>{log.phase || 'SYSTEM'}</span>
                   <span className={`shrink-0 font-black ${log.level === 'error' ? 'text-red-500' : 'text-indigo-400'}`}>@{log.channelName}</span>
-                  <span className={log.level === 'error' ? 'text-red-300' : 'text-slate-400 group-hover:text-slate-200'}>{log.message}</span>
+                  <span className={log.level === 'error' ? 'text-red-300' : 'text-slate-400'}>{log.message}</span>
                 </div>
               ))}
             </div>
