@@ -9,6 +9,7 @@ export interface ChannelConfig {
   step?: number;
   searchKeywords?: string[];
   regionCode?: string;
+  language?: 'zh-TW' | 'en'; // 新增語言設定
 }
 
 export interface ChannelState {

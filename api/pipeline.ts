@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Buffer } from 'buffer';
 
 export const config = {
-  maxDuration: 300, // 增加執行時間
+  maxDuration: 300,
   api: { bodyParser: { sizeLimit: '10mb' } } 
 };
 
@@ -16,23 +16,38 @@ export default async function handler(req: any, res: any) {
   try {
     switch (stage) {
       case 'analyze': {
+        const langName = channel.language === 'en' ? 'English' : '繁體中文';
         const q = encodeURIComponent(`#shorts ${channel.niche}`);
-        // 搜尋真實趨勢 (REST)
+        
+        // 搜尋真實趨勢
         const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&maxResults=5&order=viewCount&key=${process.env.API_KEY}`);
         const searchData = await searchRes.json();
         const trends = (searchData.items || []).map((i: any) => i.snippet.title).join("; ");
 
         const promptRes = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `基於趨勢「${trends}」，為「${channel.niche}」規劃一則爆款 9:16 短片。`,
+          contents: `
+            當前趨勢參考：${trends}
+            頻道主題：${channel.niche}
+            目標語言：${langName}
+
+            任務：請規劃一則爆款 YouTube Shorts。
+            規範重點：
+            1. Title 與 Desc 必須「直接面向觀眾」，就像是你親自經營頻道的語氣。
+            2. 嚴格禁止出現任何「企劃邏輯」、「分析」、「擬人化手法」、「爆款原理」等內部說明文字。
+            3. 標題要吸睛、具備懸念，善用 Emoji。
+            4. 描述段落要自然，並包含 3-5 個自然的主題標籤（禁止出現 #ai, #automation, #bot）。
+            
+            請產出 JSON：
+          `,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                prompt: { type: Type.STRING },
-                title: { type: Type.STRING },
-                desc: { type: Type.STRING }
+                prompt: { type: Type.STRING, description: "給影片生成引擎的詳細描述" },
+                title: { type: Type.STRING, description: "純影片標題" },
+                desc: { type: Type.STRING, description: "純影片描述與標籤" }
               },
               required: ["prompt", "title", "desc"]
             }
@@ -42,8 +57,6 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'render_and_upload': {
-        // --- 階段 1: 渲染影片 ---
-        console.log("Starting Render...");
         let operation = await ai.models.generateVideos({
           model: 'veo-3.1-fast-generate-preview',
           prompt: metadata.prompt,
@@ -59,14 +72,11 @@ export default async function handler(req: any, res: any) {
         const videoRes = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
         const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
         
-        console.log("Video Rendered, Starting Upload...");
-
-        // --- 階段 2: 直接上傳至 YouTube ---
         const boundary = '-------314159265358979323846';
         const metadataPart = JSON.stringify({
           snippet: {
-            title: metadata.title || "AI Generated Short",
-            description: (metadata.desc || "") + "\n\n#shorts #ai #automation",
+            title: metadata.title || "New Short",
+            description: metadata.desc || "",
             categoryId: "22"
           },
           status: {

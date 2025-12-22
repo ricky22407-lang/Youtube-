@@ -5,7 +5,7 @@ import { ChannelConfig } from './types';
 const App: React.FC = () => {
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newChan, setNewChan] = useState({ name: '', niche: 'AI 科技' });
+  const [newChan, setNewChan] = useState({ name: '', niche: 'AI 科技', language: 'zh-TW' as const });
   const [globalLog, setGlobalLog] = useState<string[]>([]);
 
   useEffect(() => {
@@ -62,11 +62,10 @@ const App: React.FC = () => {
       setChannels(p => p.map(c => c.id === channel.id ? { ...c, ...up } : c));
     };
 
-    update({ status: 'running', step: 1, lastLog: '正在分析趨勢並企劃爆款腳本...' });
-    addLog(`頻道「${channel.name}」啟動全自動流程...`);
+    update({ status: 'running', step: 1, lastLog: '正在分析趨勢並企劃腳本...' });
+    addLog(`[${channel.language?.toUpperCase()}] 頻道「${channel.name}」啟動流程...`);
 
     try {
-      // Step 1: Analyze
       const r1 = await fetch('/api/pipeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -76,10 +75,7 @@ const App: React.FC = () => {
       if (!d1.success) throw new Error(d1.error);
       addLog(`AI 企劃完成：${d1.metadata.title}`);
 
-      // Step 2 & 3: Render & Upload (Combined)
-      update({ step: 2, lastLog: '正在生成影片並同步至 YouTube (約需 60 秒)...' });
-      addLog("Veo 3.1 渲染引擎啟動，完成後將直接發布...");
-      
+      update({ step: 2, lastLog: 'Veo 正在渲染影片並同步至 YouTube...' });
       const r2 = await fetch('/api/pipeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -94,7 +90,7 @@ const App: React.FC = () => {
       if (!d2.success) throw new Error(d2.error);
 
       update({ status: 'success', step: 3, lastLog: `發布成功！影片 ID: ${d2.videoId}` });
-      addLog(`[成功] 頻道「${channel.name}」已發布：${d2.url}`);
+      addLog(`[成功] 已發布：${d2.url}`);
     } catch (e: any) {
       update({ status: 'error', lastLog: `失敗: ${e.message}` });
       addLog(`[錯誤] ${channel.name}: ${e.message}`);
@@ -106,6 +102,7 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       name: newChan.name || '我的 Shorts 頻道',
       niche: newChan.niche,
+      language: newChan.language,
       auth: null,
       status: 'idle',
       step: 0
@@ -124,18 +121,21 @@ const App: React.FC = () => {
         <button onClick={() => setIsModalOpen(true)} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-xl shadow-indigo-900/40 transition-all">+ 新增頻道</button>
       </nav>
 
-      <div className="flex-1 flex flex-col lg:flex-row">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         <main className="flex-1 p-8 overflow-y-auto">
           <div className="max-w-4xl mx-auto space-y-6">
             {channels.map(c => (
               <div key={c.id} className="bg-slate-900/40 border border-slate-800 rounded-[2.5rem] p-8 hover:border-indigo-500/30 transition-all shadow-2xl">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                  <div>
+                  <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
                       <h2 className="text-2xl font-black text-white">{c.name}</h2>
-                      <span className="bg-indigo-500/10 text-indigo-400 text-[10px] px-2.5 py-1 rounded-lg font-black uppercase tracking-widest">{c.niche}</span>
+                      <div className="flex gap-2">
+                        <span className="bg-indigo-500/10 text-indigo-400 text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest">{c.niche}</span>
+                        <span className="bg-slate-800 text-slate-400 text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest">{c.language === 'en' ? 'English' : '繁體中文'}</span>
+                      </div>
                     </div>
-                    <p className={`text-sm font-semibold ${c.status === 'error' ? 'text-red-400' : 'text-slate-500'}`}>{c.lastLog || '等待執行中...'}</p>
+                    <p className={`text-sm font-semibold truncate max-w-md ${c.status === 'error' ? 'text-red-400' : 'text-slate-500'}`}>{c.lastLog || '等待執行中...'}</p>
                   </div>
 
                   <div className="flex gap-4">
@@ -147,9 +147,9 @@ const App: React.FC = () => {
                       <button 
                         disabled={c.status === 'running'}
                         onClick={() => runPipeline(c)}
-                        className="px-8 py-3 bg-indigo-600 text-white rounded-2xl font-bold disabled:bg-slate-800 disabled:text-slate-600 hover:scale-105 transition-all shadow-lg shadow-indigo-900/20"
+                        className="px-8 py-3 bg-indigo-600 text-white rounded-2xl font-bold disabled:bg-slate-800 disabled:text-slate-600 hover:scale-105 transition-all shadow-lg"
                       >
-                        {c.status === 'running' ? '執行中...' : '發布真實影片'}
+                        {c.status === 'running' ? '執行中...' : '發布影片'}
                       </button>
                     )}
                     <button onClick={() => setChannels(channels.filter(x => x.id !== c.id))} className="p-3 bg-slate-800 text-slate-500 hover:bg-red-600 hover:text-white rounded-2xl transition-all">
@@ -161,7 +161,7 @@ const App: React.FC = () => {
                 {c.status === 'running' && (
                   <div className="mt-8 space-y-3">
                     <div className="flex justify-between text-[10px] font-black text-indigo-400 uppercase tracking-[0.2em]">
-                      <span>BACKEND_TUNNEL_ACTIVE</span>
+                      <span>AI_CONTENT_GENERATION</span>
                       <span>Progress {c.step} / 3</span>
                     </div>
                     <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden">
@@ -174,7 +174,7 @@ const App: React.FC = () => {
           </div>
         </main>
 
-        <aside className="w-full lg:w-96 border-l border-slate-800 bg-slate-950/50 p-6 flex flex-col">
+        <aside className="w-full lg:w-96 border-l border-slate-800 bg-slate-950/50 p-6 flex flex-col shadow-2xl">
           <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6 px-2">System Console</h3>
           <div className="flex-1 overflow-y-auto space-y-2 font-mono text-[11px] leading-relaxed">
             {globalLog.map((log, i) => (
@@ -193,15 +193,22 @@ const App: React.FC = () => {
             <div className="space-y-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">頻道標籤</label>
-                <input autoFocus className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600" placeholder="例如：主頻道-測試用" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} />
+                <input autoFocus className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600 transition-all" placeholder="例如：主頻道-測試用" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">內容語言 (Language)</label>
+                <select className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600 appearance-none cursor-pointer" value={newChan.language} onChange={e => setNewChan({...newChan, language: e.target.value as any})}>
+                  <option value="zh-TW">繁體中文 (Traditional Chinese)</option>
+                  <option value="en">英文 (English)</option>
+                </select>
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-1">內容主軸</label>
-                <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600" placeholder="例如：可愛寵物" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} />
+                <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600 transition-all" placeholder="例如：可愛寵物" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} />
               </div>
               <div className="flex gap-4 pt-6">
-                <button onClick={() => setIsModalOpen(false)} className="flex-1 py-4 text-slate-500 font-bold">取消</button>
-                <button onClick={createChannel} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">建立</button>
+                <button onClick={() => setIsModalOpen(false)} className="flex-1 py-4 text-slate-500 font-bold hover:text-white transition-colors">取消</button>
+                <button onClick={createChannel} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-500 transition-all">建立</button>
               </div>
             </div>
           </div>
