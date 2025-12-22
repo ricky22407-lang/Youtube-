@@ -1,3 +1,4 @@
+
 import { CandidateWeightEngine } from '../modules/CandidateWeightEngine';
 import { MOCK_CHANNEL_STATE } from '../constants';
 import { TestResult, CandidateTheme } from '../types';
@@ -10,7 +11,9 @@ const MOCK_CANDIDATES: CandidateTheme[] = [
     object_type: "Smartphone",
     structure_type: "Experiment",
     algorithm_signals: ["satisfying"],
-    selected: false
+    selected: false,
+    // Fix: Added missing required property total_score
+    total_score: 0
   },
   {
     id: "c2",
@@ -19,7 +22,9 @@ const MOCK_CANDIDATES: CandidateTheme[] = [
     object_type: "Cucumber",
     structure_type: "Reaction",
     algorithm_signals: ["funny"],
-    selected: false
+    selected: false,
+    // Fix: Added missing required property total_score
+    total_score: 0
   }
 ];
 
