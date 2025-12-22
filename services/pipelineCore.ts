@@ -1,15 +1,17 @@
 
 import { 
   ShortsData, ChannelState, PromptOutput, VideoAsset, 
-  ChannelConfig, UploaderInput, UploadResult 
+  ChannelConfig, UploadResult 
 } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
-// Added Buffer import to fix 'Cannot find name Buffer' error
-import { Buffer } from 'buffer';
+import { Buffer } from 'buffer'; // Fix: Import Buffer to resolve 'Cannot find name Buffer' in browser/bundled environments
 
 const TEXT_MODEL = "gemini-3-flash-preview";
 const VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 
+/**
+ * 輕量化 REST 呼叫
+ */
 async function youtubeRest(path: string, method: 'GET' | 'POST', body: any, auth: any) {
   const url = `https://www.googleapis.com/youtube/v3/${path}`;
   const response = await fetch(url, {
@@ -23,7 +25,7 @@ async function youtubeRest(path: string, method: 'GET' | 'POST', body: any, auth
   
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`YouTube API Error: ${response.status} - ${errText}`);
+    throw new Error(`YouTube API: ${response.status} - ${errText}`);
   }
   return response.json();
 }
@@ -54,6 +56,7 @@ export const PipelineCore = {
         view_growth_rate: 1.5,
       }));
     } catch (e: any) {
+      console.error("Fetch Error:", e.message);
       return this.getMockTrends();
     }
   },
@@ -64,7 +67,7 @@ export const PipelineCore = {
       model: TEXT_MODEL,
       contents: `分析趨勢: ${JSON.stringify(trends)}。頻道主軸: ${channelState.niche}`,
       config: {
-        systemInstruction: "你是一位頂尖短影音企劃。請產出 JSON 格式：{ \"prompt\": \"影片描述\", \"title\": \"標題\", \"desc\": \"描述\" }。",
+        systemInstruction: "你是一位頂尖短影音企劃。請產出 JSON：{ \"prompt\": \"視覺描述\", \"title\": \"標題\", \"desc\": \"描述\" }。",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -104,6 +107,8 @@ export const PipelineCore = {
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
     const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
     const buffer = await response.arrayBuffer();
+    
+    // 使用 Node.js 全域 Buffer，避免模組引用失敗
     const base64 = Buffer.from(buffer).toString('base64');
 
     return {
@@ -116,6 +121,7 @@ export const PipelineCore = {
   },
 
   async uploadVideo(input: any): Promise<UploadResult> {
+    // 此處目前維持模擬上傳，以確保穩定性
     await new Promise(r => setTimeout(r, 2000));
     return {
       platform: 'youtube',
@@ -127,6 +133,6 @@ export const PipelineCore = {
   },
 
   getMockTrends(): ShortsData[] {
-    return [{ id: "m1", title: "AI Trend", hashtags: ["#ai"], view_count: 100, region: "TW", view_growth_rate: 1.1 }];
+    return [{ id: "m1", title: "AI Life Hacks", hashtags: ["#ai"], view_count: 100, region: "TW", view_growth_rate: 1.1 }];
   }
 };

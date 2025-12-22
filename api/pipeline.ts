@@ -2,65 +2,64 @@
 import { PipelineCore } from '../services/pipelineCore';
 
 export const config = {
-  maxDuration: 300, // Veo 影片生成可能需要較長時間
-  api: { bodyParser: { sizeLimit: '10mb' } }
+  maxDuration: 300,
+  api: { bodyParser: { sizeLimit: '15mb' } }
 };
 
 export default async function handler(req: any, res: any) {
-  // 強制設定 JSON 回應
+  // 設定回應格式
   res.setHeader('Content-Type', 'application/json');
   
-  if (req.method !== 'POST') return res.status(405).json({ success: false, error: 'Method Not Allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Only POST allowed' });
+  }
 
   const logs: string[] = [];
   const log = (msg: string) => {
     logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
-    console.log(`[PIPELINE] ${msg}`);
+    console.log(`[PIPELINE_STG] ${msg}`);
   };
 
   try {
     const { stage, channelConfig, metadata, videoAsset } = req.body;
     
-    if (!process.env.API_KEY) throw new Error("環境變數 API_KEY 缺失，請檢查設定。");
+    if (!process.env.API_KEY) {
+      throw new Error("SERVER_CONFIG_ERROR: API_KEY is not defined in environment.");
+    }
 
     switch (stage) {
       case 'analyze':
-        log("開始分析熱門趨勢...");
+        log("分析啟動...");
         const trends = await PipelineCore.fetchTrends(channelConfig);
-        log("趨勢分析完成，正在構思影片企劃...");
         const resultMetadata = await PipelineCore.planContent(trends, channelConfig.channelState);
         return res.status(200).json({ success: true, logs, trends, metadata: resultMetadata });
 
       case 'video':
-        log("啟動 Veo 3.1 影片生成引擎 (此步驟約需 45-90 秒)...");
-        if (!metadata) throw new Error("缺少企劃元數據 (Metadata)");
+        log("影像引擎啟動...");
+        if (!metadata) throw new Error("Metadata is required for video stage");
         const resultVideo = await PipelineCore.renderVideo(metadata);
-        log("影片渲染成功！");
         return res.status(200).json({ success: true, logs, videoAsset: resultVideo });
 
       case 'upload':
-        log("準備發布至 YouTube...");
-        if (!videoAsset) throw new Error("缺少影片素材 (VideoAsset)");
+        log("發布程序啟動...");
+        if (!videoAsset) throw new Error("Video asset is required for upload stage");
         const uploadResult = await PipelineCore.uploadVideo({
           video_asset: videoAsset,
           metadata: metadata,
           schedule: channelConfig.schedule,
           authCredentials: channelConfig.auth
         });
-        log("影片已成功同步。");
         return res.status(200).json({ success: true, logs, uploadId: uploadResult.video_id, finalUrl: uploadResult.platform_url });
 
       default:
-        throw new Error(`未支援的管線階段: ${stage}`);
+        return res.status(400).json({ success: false, error: `Unsupported stage: ${stage}` });
     }
 
   } catch (error: any) {
-    console.error("Pipeline Runtime Error:", error);
-    // 確保即使發生嚴重錯誤，也回傳 JSON 而不是讓伺服器噴 500
+    console.error("Critical API Error:", error);
     return res.status(200).json({
       success: false,
-      error: `[INTERNAL_SYSTEM_ERROR] ${error.message || "未知伺服器異常"}`,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      error: `RUNTIME_EXCEPTION: ${error.message || "Unknown error occurred during processing."}`,
       logs
     });
   }
