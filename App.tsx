@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, ReactNode } from 'react';
+import React, { useState, useEffect, ReactNode, Component } from 'react';
 import { 
   ChannelConfig, LogEntry, PipelineResult 
 } from './types';
@@ -19,8 +19,8 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-// Fix: Use React.Component explicitly to ensure props type inference works correctly on line 44
-class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+// Fix: Use Component from react explicitly to ensure props and state type inference works correctly in the class methods
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
