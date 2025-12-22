@@ -34,10 +34,12 @@ const App: React.FC = () => {
     if (isFirebaseConfigured && db) {
       addLog("系統連線：Firebase 雲端同步模式。");
       
+      // 監聽全局引擎狀態
       onSnapshot(doc(db, "system", "status"), (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
-          const lastHeartbeat = data.lastHeartbeat?.toMillis ? data.lastHeartbeat.toMillis() : (data.lastHeartbeat || Date.now());
+          // 將 Firebase Timestamp 轉換為毫秒數字，若不存在則給予 0
+          const lastHeartbeat = data.lastHeartbeat?.toMillis ? data.lastHeartbeat.toMillis() : (data.lastHeartbeat || 0);
           setSystemStatus({
             ...data,
             lastHeartbeat
@@ -45,8 +47,11 @@ const App: React.FC = () => {
         } else {
           setSystemStatus(null);
         }
+      }, (error) => {
+        addLog(`❌ Firebase 監聽失敗: ${error.message}。請檢查 Firestore 安全規則。`);
       });
 
+      // 監聽頻道列表
       const q = query(collection(db, "channels"));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ ...doc.data() as ChannelConfig, id: doc.id }));
@@ -66,14 +71,19 @@ const App: React.FC = () => {
     try {
       addLog("正在嘗試修復雲端心跳文件...");
       const statusRef = doc(db, "system", "status");
+      // 使用 serverTimestamp 確保伺服器時間同步
       await setDoc(statusRef, {
         lastHeartbeat: serverTimestamp(),
         engineStatus: 'online',
         activeTasks: 0
       }, { merge: true });
-      addLog("✅ 雲端狀態已初始化！燈號應會轉綠。");
+      addLog("✅ 雲端狀態文件已重建。如果燈號仍未轉綠，請重新載入網頁。");
     } catch (e: any) {
-      addLog(`❌ 修復失敗: ${e.message}。請檢查 Firestore 權限。`);
+      if (e.message.includes('permission')) {
+        addLog("❌ 權限不足：請在 Firebase Console 將 Firestore Rule 設為 'allow read, write: if true;'。");
+      } else {
+        addLog(`❌ 修復失敗: ${e.message}`);
+      }
     }
     setIsSyncing(false);
   };
@@ -177,6 +187,7 @@ const App: React.FC = () => {
     }
   };
 
+  // 判定引擎是否活著：3分鐘內有心跳
   const isEnginePulseActive = systemStatus && (Date.now() - systemStatus.lastHeartbeat < 180000);
 
   return (
@@ -208,6 +219,11 @@ const App: React.FC = () => {
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         <main className="flex-1 p-8 overflow-y-auto">
           <div className="max-w-4xl mx-auto space-y-6">
+            {channels.length === 0 && (
+              <div className="text-center py-20 border-2 border-dashed border-slate-800 rounded-[3rem]">
+                <p className="text-slate-500 font-bold italic">目前沒有頻道，點擊右上角新增。</p>
+              </div>
+            )}
             {channels.map(c => {
               const isCloudReady = c.auth && c.schedule?.autoEnabled && c.cloudSynced && isEnginePulseActive;
               return (
@@ -254,7 +270,7 @@ const App: React.FC = () => {
 
                       <div className="p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
                          <p className={`text-sm font-bold ${c.status === 'running' ? 'text-indigo-400 animate-pulse' : c.status === 'error' ? 'text-rose-400' : 'text-slate-300'}`}>
-                           {c.lastLog || (isEnginePulseActive ? '等待排程時間...' : '⚠️ 雲端引擎離線，暫由本地代管')}
+                           {c.lastLog || (isEnginePulseActive ? '等待排程時間...' : '⚠️ 雲端引擎離線中')}
                          </p>
                       </div>
                     </div>
@@ -271,7 +287,7 @@ const App: React.FC = () => {
                         </button>
                       )}
                       <div className="flex gap-2">
-                        <button onClick={() => openModal(c)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs transition-all">⚙️ 調整排程</button>
+                        <button onClick={() => openModal(c)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs transition-all">⚙️ 排程</button>
                         <button onClick={() => { if(confirm("刪除頻道？")) setChannels(prev => prev.filter(x => x.id !== c.id)) }} className="p-3 bg-slate-800 hover:bg-rose-900/40 hover:text-rose-500 text-slate-500 rounded-xl transition-all">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         </button>
@@ -302,16 +318,17 @@ const App: React.FC = () => {
             
             {!isEnginePulseActive && isFirebaseConfigured && (
               <div className="mt-4 space-y-3">
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[9px] text-rose-400 font-bold leading-relaxed">
-                  診斷：尚未偵測到雲端脈搏。這通常是因為專案中缺少 `system/status` 文件，或 Cloud Functions 未部署。
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[9px] text-amber-400 font-bold leading-relaxed">
+                  診斷：尚未偵測到雲端脈搏。這通常是因為專案中缺少 `system/status` 文件。
                 </div>
                 <button 
                   onClick={forceResetHeartbeat}
                   disabled={isSyncing}
-                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all"
+                  className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg active:scale-95"
                 >
-                  {isSyncing ? '嘗試中...' : '手動修復雲端狀態文件'}
+                  {isSyncing ? '正在嘗試修復...' : '✨ 手動修復雲端狀態文件'}
                 </button>
+                <p className="text-[8px] text-slate-600 text-center uppercase tracking-tighter">點擊後燈號變綠，代表資料庫已通。</p>
               </div>
             )}
           </div>
@@ -326,27 +343,28 @@ const App: React.FC = () => {
         </aside>
       </div>
 
+      {/* Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-6 z-[100]">
           <div className="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-[3rem] p-10 shadow-2xl animate-slide-down">
             <div className="flex justify-between items-center mb-8">
-              <h2 className="text-2xl font-black text-white italic uppercase">{editingId ? '編輯頻道設定' : '新增頻道'}</h2>
+              <h2 className="text-2xl font-black text-white italic uppercase">{editingId ? '編輯排程' : '新增頻道'}</h2>
               {isSyncing && <div className="animate-spin w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full"></div>}
             </div>
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase px-1">頻道名稱</label>
+                  <label className="text-[10px] font-black text-slate-500 uppercase px-1">名稱</label>
                   <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600 transition-all" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase px-1">主軸 (Niche)</label>
+                  <label className="text-[10px] font-black text-slate-500 uppercase px-1">主軸</label>
                   <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600 transition-all" value={form.niche} onChange={e => setForm({...form, niche: e.target.value})} />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-500 uppercase px-1">自動排程 (星期幾)</label>
+                <label className="text-[10px] font-black text-slate-500 uppercase px-1">發布週期</label>
                 <div className="flex justify-between gap-1.5">
                   {['日','一','二','三','四','五','六'].map((name, i) => (
                     <button key={i} onClick={() => {
@@ -363,16 +381,16 @@ const App: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase px-1">發布時間</label>
+                  <label className="text-[10px] font-black text-slate-500 uppercase px-1">每日發布時間</label>
                   <input type="time" className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-600 transition-all" value={form.schedule.time} onChange={e => setForm({...form, schedule: {...form.schedule, time: e.target.value}})} />
                 </div>
                 <div className="flex items-end">
                    <button onClick={saveChannel} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-900/40 hover:bg-indigo-500 transition-all text-sm">
-                     {editingId ? '儲存同步至雲端' : '確認建立並同步'}
+                     {editingId ? '儲存並同步' : '確認建立'}
                    </button>
                 </div>
               </div>
-              <button onClick={() => setIsModalOpen(false)} className="w-full py-2 text-slate-600 text-[10px] font-black uppercase tracking-widest">取消離開</button>
+              <button onClick={() => setIsModalOpen(false)} className="w-full py-2 text-slate-600 text-[10px] font-black uppercase tracking-widest">取消</button>
             </div>
           </div>
         </div>
