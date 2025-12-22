@@ -1,10 +1,28 @@
 
+export interface ChannelConfig {
+  id: string;
+  name: string;
+  niche: string;
+  auth: any | null;
+  status: 'idle' | 'running' | 'success' | 'error';
+  lastLog?: string;
+  step?: number;
+  searchKeywords?: string[];
+  regionCode?: string;
+}
+
+export interface ChannelState {
+  niche: string;
+  avg_views: number;
+  target_audience: string;
+}
+
 export interface ShortsData {
   id: string;
   title: string;
   hashtags: string[];
   view_count: number;
-  region: string;
+  region?: string;
   view_growth_rate: number;
   publishedAt?: string;
 }
@@ -25,8 +43,8 @@ export interface CandidateTheme {
   structure_type: string;
   algorithm_signals: string[];
   rationale?: string;
-  total_score?: number;
-  selected?: boolean;
+  total_score: number;
+  selected: boolean;
   scoring_breakdown?: {
     virality: number;
     feasibility: number;
@@ -34,10 +52,10 @@ export interface CandidateTheme {
   };
 }
 
-export interface ChannelState {
-  niche: string;
-  avg_views: number;
-  target_audience: string;
+export interface PipelineMetadata {
+  prompt: string;
+  title: string;
+  desc: string;
 }
 
 export interface PromptOutput {
@@ -52,91 +70,39 @@ export interface VideoAsset {
   candidate_id: string;
   video_url: string;
   mime_type: string;
-  status: 'generated' | 'failed';
+  status: string;
   generated_at: string;
+  base64?: string;
 }
 
-export interface ScheduleConfig {
-  active: boolean;
-  cron_expression?: string;
-  privacy_status: 'private' | 'public' | 'unlisted';
-  publish_at?: string;
-}
-
-export interface AuthCredentials {
-  access_token: string;
-  refresh_token?: string;
-  scope?: string;
-  token_type?: string;
-  expiry_date?: number;
-}
-
-// Fix: Added missing UploaderInput and UploadResult interfaces used by UploaderScheduler module
 export interface UploaderInput {
   video_asset: VideoAsset;
   metadata: PromptOutput;
-  schedule: ScheduleConfig;
-  authCredentials?: AuthCredentials;
+  schedule: {
+    active: boolean;
+    privacy_status?: string;
+    publish_at?: string;
+  };
+  authCredentials?: any;
 }
 
 export interface UploadResult {
   platform: string;
   video_id: string;
   platform_url: string;
-  status: 'uploaded' | 'scheduled';
+  status: string;
   scheduled_for?: string;
   uploaded_at: string;
-}
-
-export interface ChannelConfig {
-  id: string;
-  name: string;
-  regionCode: string;
-  searchKeywords: string[];
-  channelState: ChannelState;
-  schedule: ScheduleConfig;
-  auth: AuthCredentials | null;
-  lastRun?: string;
-  status: 'idle' | 'running' | 'error' | 'success';
-  currentStep?: number;
-  stepLabel?: string;
-  results?: {
-    trends?: ShortsData[];
-    winner?: CandidateTheme;
-    metadata?: PromptOutput;
-  };
-}
-
-export interface LogEntry {
-  id: string;
-  timestamp: string;
-  channelId: string;
-  channelName: string;
-  level: 'info' | 'success' | 'error';
-  message: string;
-  phase?: string;
-}
-
-export interface PipelineResult {
-  success: boolean;
-  logs: string[];
-  videoUrl?: string;
-  uploadId?: string;
-  error?: string;
-  // New fields for intermediate reporting
-  trends?: ShortsData[];
-  winner?: CandidateTheme;
-  metadata?: PromptOutput;
-}
-
-export interface IModule<TInput, TOutput> {
-  name: string;
-  description: string;
-  execute(input: TInput): Promise<TOutput>;
 }
 
 export interface TestResult {
   moduleName: string;
   passed: boolean;
   logs: string[];
+}
+
+export interface IModule<I, O> {
+  name: string;
+  description: string;
+  execute(input: I): Promise<O>;
 }
