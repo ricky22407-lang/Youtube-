@@ -10,13 +10,11 @@ const TEXT_MODEL = "gemini-3-flash-preview";
 const VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 
 export const PipelineCore = {
-  getApiKey() {
-    if (typeof process !== 'undefined' && process.env?.API_KEY) return process.env.API_KEY;
-    return (import.meta as any).env?.VITE_GEMINI_API_KEY || "";
-  },
+  // Removed getApiKey helper to strictly comply with the rule: obtain process.env.API_KEY directly.
 
   async fetchTrends(config: any): Promise<ShortsData[]> {
-    const apiKey = this.getApiKey();
+    // Fix: Exclusively use process.env.API_KEY
+    const apiKey = process.env.API_KEY;
     const query = encodeURIComponent(`#shorts ${config.niche || 'AI'}`);
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&type=video&maxResults=5&order=viewCount&key=${apiKey}`;
     
@@ -39,7 +37,8 @@ export const PipelineCore = {
   },
 
   async planContent(trends: ShortsData[], channelState: any): Promise<PromptOutput> {
-    const ai = new GoogleGenAI({ apiKey: this.getApiKey() });
+    // Fix: Instantiate GoogleGenAI directly with process.env.API_KEY in a named parameter
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: TEXT_MODEL,
       contents: `分析趨勢：${trends.map(t => t.title).join(', ')}。為「${channelState.niche}」頻道規劃一個 9:16 的爆款影片。`,
@@ -58,6 +57,7 @@ export const PipelineCore = {
       }
     });
 
+    // Fix: Access .text property directly (it's a getter, not a method)
     const assets = JSON.parse(response.text || '{}');
     return {
       candidate_id: "ai_" + Date.now(),
@@ -69,7 +69,8 @@ export const PipelineCore = {
   },
 
   async renderVideo(metadata: PromptOutput): Promise<VideoAsset> {
-    const ai = new GoogleGenAI({ apiKey: this.getApiKey() });
+    // Fix: Instantiate GoogleGenAI directly with process.env.API_KEY in a named parameter
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     let operation = await ai.models.generateVideos({
       model: VIDEO_MODEL,
       prompt: metadata.prompt,
@@ -78,6 +79,7 @@ export const PipelineCore = {
 
     let attempts = 0;
     while (!operation.done && attempts < 40) {
+      // Fix: Follow 10-second polling recommendation for video generation
       await new Promise(r => setTimeout(r, 10000));
       operation = await ai.operations.getVideosOperation({ operation });
       attempts++;
@@ -86,7 +88,8 @@ export const PipelineCore = {
     if (!operation.done) throw new Error("影片生成超時 (Veo Timeout)");
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    const res = await fetch(`${downloadLink}&key=${this.getApiKey()}`);
+    // Fix: Append process.env.API_KEY to the download link
+    const res = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
     const buffer = await res.arrayBuffer();
     
     let base64 = "";
