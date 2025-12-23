@@ -16,6 +16,17 @@ const firebaseConfig = {
 
 const DAYS_NAME = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// 新增：可中斷的延時函式
+const sleep = (ms: number, signal?: AbortSignal) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    });
+  });
+};
+
 const App: React.FC = () => {
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -28,9 +39,7 @@ const App: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const dbRef = useRef<any>(null);
   
-  // 原子鎖：防止 checkSchedules 在同一時間重複執行
   const isCheckingRef = useRef(false);
-  // 任務鎖：紀錄目前正在啟動中的頻道 ID，防止 Race Condition
   const activeLaunchRef = useRef<Set<string>>(new Set());
 
   const [globalLog, setGlobalLog] = useState<string[]>([]);
@@ -45,14 +54,12 @@ const App: React.FC = () => {
     }
   });
 
-  // 1. 初始化 Firebase (僅用於數據同步與遠端觸發)
   useEffect(() => {
     try {
       const app = initializeApp(firebaseConfig);
       dbRef.current = getDatabase(app);
       setCloudStatus('connected');
       
-      // 監聽遠端強制觸發訊號
       const remoteTriggerRef = ref(dbRef.current, 'system/remote_trigger');
       onValue(remoteTriggerRef, (snapshot) => {
         const data = snapshot.val();
@@ -66,13 +73,12 @@ const App: React.FC = () => {
     }
   }, [isEngineActive]);
 
-  // 2. 核心排程器：改用前端控制的 Interval (每 30 秒檢查一次)
   useEffect(() => {
     let timer: any;
     if (isEngineActive) {
       timer = setInterval(() => {
         checkSchedules();
-      }, 30000); // 30 秒是一個安全的時間間隔
+      }, 30000);
     }
     return () => clearInterval(timer);
   }, [isEngineActive, channels, isAnyChannelRendering]);
@@ -99,9 +105,7 @@ const App: React.FC = () => {
   };
 
   const checkSchedules = () => {
-    // 如果正在檢查中或是已有頻道在渲染，直接跳過
     if (isCheckingRef.current || isAnyChannelRendering) return;
-    
     isCheckingRef.current = true;
 
     const now = new Date();
@@ -111,19 +115,15 @@ const App: React.FC = () => {
     try {
       channels.forEach((channel) => {
         if (!channel.autoDeploy || !channel.weeklySchedule || channel.status === 'running') return;
-
         const isToday = channel.weeklySchedule.days.includes(currentDay);
         const isCorrectTime = channel.weeklySchedule.times.includes(currentTime);
         const slotId = `${currentDay}_${currentTime}`;
-
-        // 雙重檢查：不在正在啟動名單中且 slot 不同
         if (isToday && isCorrectTime && channel.lastTriggeredSlot !== slotId && !activeLaunchRef.current.has(channel.id)) {
           addLog(`⏰ 時段匹配: ${channel.name} (${currentTime})`);
           runPipeline(channel, slotId);
         }
       });
 
-      // 只有在真的有需要更新時才寫回 Firebase，且換一個路徑寫入避免觸發 loop
       if (dbRef.current && isEngineActive) {
         set(ref(dbRef.current, 'system/heartbeat'), {
           last_check: serverTimestamp(),
@@ -137,20 +137,25 @@ const App: React.FC = () => {
 
   const abortPipeline = (id: string) => {
     if (abortControllers.current[id]) {
+      // 1. 發送中斷信號
       abortControllers.current[id].abort();
-      delete abortControllers.current[id];
-      activeLaunchRef.current.delete(id);
-      addLog(`⚡ 手動中斷頻道任務: ${id}`);
+      
+      // 2. 立即清理 UI 狀態，不等待非同步鏈完成
+      addLog(`⚡ 已強制終止頻道任務: ${id}`);
       setChannels(p => p.map(c => c.id === id ? { ...c, status: 'idle', lastLog: '任務已手動取消', step: 0 } : c));
+      
+      // 3. 釋放全域原子鎖
+      activeLaunchRef.current.delete(id);
       setIsAnyChannelRendering(false);
+      
+      // 4. 移除控制器參考
+      delete abortControllers.current[id];
     }
   };
 
   const runPipeline = async (channel: ChannelConfig, slotId?: string) => {
-    // 原子級檢查
     if (channel.status === 'running' || isAnyChannelRendering || activeLaunchRef.current.has(channel.id)) return;
     
-    // 立即鎖定
     activeLaunchRef.current.add(channel.id);
     setIsAnyChannelRendering(true);
     
@@ -169,6 +174,7 @@ const App: React.FC = () => {
     });
 
     try {
+      // 階段 1: 分析
       const r1 = await fetch('/api/pipeline', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
@@ -178,8 +184,12 @@ const App: React.FC = () => {
       const d1 = await r1.json();
       if (!d1.success) throw new Error(d1.error);
 
+      // 檢查中斷
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
       update({ step: 40, lastLog: 'Veo 渲染中 (120s 盲等 + 30s 輪詢)...' });
 
+      // 階段 2: 渲染與上傳
       const r2 = await fetch('/api/pipeline', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
@@ -190,11 +200,12 @@ const App: React.FC = () => {
       
       if (!d2.success) {
         if (d2.isQuotaError) {
-          addLog("⚠️ API 額度限制，佇列等待重試...");
+          addLog("⚠️ API 額度限制，等待重試...");
           update({ lastLog: 'API 429 限制，佇列等待中...', step: 30 });
-          await new Promise(r => setTimeout(r, 65000));
           
-          // 重試前釋放鎖
+          // 使用可中斷的 sleep
+          await sleep(65000, controller.signal);
+          
           activeLaunchRef.current.delete(channel.id);
           setIsAnyChannelRendering(false);
           return runPipeline(channel, slotId); 
@@ -209,13 +220,15 @@ const App: React.FC = () => {
       });
       addLog(`✅ ${channel.name} 任務完成`);
     } catch (e: any) {
-      if (e.name === 'AbortError') {
-        update({ status: 'idle', lastLog: '任務已強制終止', step: 0 });
+      if (e.name === 'AbortError' || controller.signal.aborted) {
+        // UI 已在 abortPipeline 更新，這裡僅記錄日誌
+        console.log(`[Pipeline] ${channel.name} aborted.`);
       } else {
         update({ status: 'error', lastLog: `${e.message}`, step: 0 });
         addLog(`❌ 失敗: ${e.message}`);
       }
     } finally {
+      // 確保資源釋放
       setIsAnyChannelRendering(false);
       activeLaunchRef.current.delete(channel.id);
       delete abortControllers.current[channel.id];
@@ -244,7 +257,7 @@ const App: React.FC = () => {
   const saveChannel = () => {
     if (!newChan.name) return;
     const cleanTimes = newChan.weeklySchedule.times.filter(t => t !== '');
-    const configToSave = { ...newChan, weeklySchedule: { ...newChan.weeklySchedule, times: cleanTimes } };
+    const configToSave = { ...newChan, weeklySchedule: { ...newChan.weeklySchedule, days: newChan.weeklySchedule.days, times: cleanTimes } };
 
     if (editingId) {
       setChannels(channels.map(c => c.id === editingId ? { ...c, ...configToSave } : c));
