@@ -3,8 +3,6 @@ export default async function handler(req: any, res: any) {
   const { action } = req.query;
   const ID_OR_URL = (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '').trim();
   
-  console.log(`[ONYX DB] Request: ${action}, Project: ${ID_OR_URL ? 'PRESENT' : 'MISSING'}`);
-
   if (!ID_OR_URL) {
     return res.status(200).json({ 
       success: false, 
@@ -12,17 +10,30 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  let DB_URL = '';
-  if (ID_OR_URL.startsWith('http')) {
-    DB_URL = ID_OR_URL.endsWith('.json') ? ID_OR_URL : `${ID_OR_URL.endsWith('/') ? ID_OR_URL : ID_OR_URL + '/'}channels.json`;
-  } else {
-    DB_URL = `https://${ID_OR_URL}.firebaseio.com/channels.json`;
-  }
+  // 聰明解析 Firebase REST URL
+  const getFullUrl = (input: string) => {
+    if (input.startsWith('http')) {
+      return input.endsWith('.json') ? input : `${input.endsWith('/') ? input : input + '/'}channels.json`;
+    }
+    // 如果包含點，通常是新版的 region 格式，例如 project-id.asia-southeast1
+    if (input.includes('.')) {
+      return `https://${input}.firebasedatabase.app/channels.json`;
+    }
+    // 預設舊版格式
+    return `https://${input}.firebaseio.com/channels.json`;
+  };
+
+  const DB_URL = getFullUrl(ID_OR_URL);
 
   try {
     if (action === 'list') {
       const dbRes = await fetch(DB_URL);
-      if (!dbRes.ok) throw new Error(`Firebase Access Failed: ${dbRes.status}`);
+      if (!dbRes.ok) {
+        const errorDetail = dbRes.status === 404 ? 
+          `找不到路徑。請檢查 Firebase Realtime Database 是否已建立，且網址正確。嘗試連線至: ${DB_URL.split('.com')[0]}...` : 
+          `Firebase Error: ${dbRes.status}`;
+        throw new Error(errorDetail);
+      }
       
       const rawText = await dbRes.text();
       const data = rawText ? JSON.parse(rawText) : null;

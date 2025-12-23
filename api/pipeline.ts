@@ -12,15 +12,22 @@ export default async function handler(req: any, res: any) {
   
   const { stage, channel } = req.body;
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const FIREBASE_ID = (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '').trim();
-  const DB_URL = `https://${FIREBASE_ID}.firebaseio.com/channels.json`;
+  const ID_OR_URL = (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '').trim();
+
+  const getDbUrl = (input: string) => {
+    if (input.startsWith('http')) return input.endsWith('.json') ? input : `${input.endsWith('/') ? input : input + '/'}channels.json`;
+    if (input.includes('.')) return `https://${input}.firebasedatabase.app/channels.json`;
+    return `https://${input}.firebaseio.com/channels.json`;
+  };
+
+  const DB_URL = getDbUrl(ID_OR_URL);
 
   // 輔助函式：更新 Firebase 狀態
   const updateStatus = async (step: number, log: string, status: string = 'running') => {
     try {
       const currentRes = await fetch(DB_URL);
       const allData = await currentRes.json();
-      const channels = Array.isArray(allData) ? allData : Object.values(allData);
+      const channels = Array.isArray(allData) ? allData : (allData ? Object.values(allData) : []);
       const updated = channels.map((c: any) => 
         c.id === channel.id ? { ...c, step, lastLog: log, status } : c
       );
@@ -130,7 +137,7 @@ export default async function handler(req: any, res: any) {
       // 更新發文歷史
       const finalDbRes = await fetch(DB_URL);
       const finalDbData = await finalDbRes.json();
-      const finalChannels = Array.isArray(finalDbData) ? finalDbData : Object.values(finalDbData);
+      const finalChannels = Array.isArray(finalDbData) ? finalDbData : (finalDbData ? Object.values(finalDbData) : []);
       const finalUpdated = finalChannels.map((c: any) => {
         if (c.id === channel.id) {
           const history = c.history || [];
