@@ -14,7 +14,7 @@ export default async function handler(req: any, res: any) {
   if (!channel || !channel.id) return res.status(400).json({ error: 'Missing channel ID' });
 
   const API_KEY = process.env.API_KEY;
-  if (!API_KEY) return res.status(200).json({ success: false, error: '環境變數 API_KEY 遺失' });
+  if (!API_KEY) return res.status(200).json({ success: false, error: '環境變數 API_KEY 遺失，請檢查 Vercel 設定。' });
 
   const ID_OR_URL = (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '').trim();
 
@@ -31,72 +31,70 @@ export default async function handler(req: any, res: any) {
   };
 
   const DB_URL = getFullUrl(ID_OR_URL);
-  if (!DB_URL) return res.status(200).json({ success: false, error: 'Firebase 網址構造失敗' });
-
-  // 狀態更新：確保非同步執行且不阻塞主流程
+  
   const updateStatus = async (step: number, log: string, status: string = 'running') => {
-    console.log(`[PIPELINE] Updating: ${log} (${step}%)`);
+    console.log(`[PIPELINE STATUS] ${log} (${step}%)`);
     try {
+      if (!DB_URL) return;
       const dbRes = await fetch(DB_URL);
       if (!dbRes.ok) return;
-      
       const raw = await dbRes.json();
       let channels = Array.isArray(raw) ? raw : (raw ? Object.values(raw) : []);
-      
       const updated = channels.map((c: any) => 
         c.id === channel.id ? { ...c, step, lastLog: log, status } : c
       );
-      
       await fetch(DB_URL, { 
         method: 'PUT', 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated) 
       });
     } catch (e) {
-      console.error("[PIPELINE STATUS ERROR]", e);
+      console.error("[PIPELINE DB UPDATE ERROR]", e);
     }
   };
 
   try {
     if (stage === 'full_flow') {
-      // 步驟 1：診斷連線
-      await updateStatus(10, "📡 正在確認雲端引擎與資料庫連線...");
-      const testRes = await fetch(DB_URL);
-      if (!testRes.ok) throw new Error("Firebase 資料庫無法連接，請檢查 Rules 或 Project ID。");
-
-      // 步驟 2：Gemini 構思劇本
-      await updateStatus(25, "🔍 正在聯繫 Gemini 分析趨勢並撰寫劇本...");
+      await updateStatus(10, "📡 正在確認服務連線...");
+      
       const ai = new GoogleGenAI({ apiKey: API_KEY });
       const targetLang = channel.language === 'en' ? 'English' : 'Traditional Chinese (繁體中文)';
       
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `你是一位短影音行銷大師。請針對 Niche: ${channel.niche} 使用語言: ${targetLang} 產出一個具備病毒式傳播潛力的 YouTube Short 企劃。`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              visual_prompt: { type: Type.STRING, description: "給影片生成模型的詳細視覺描述，包含鏡頭與燈光" },
-              title: { type: Type.STRING, description: "影片標題 (含 Emoji)" },
-              description: { type: Type.STRING, description: "影片描述 (含 Hashtags)" }
-            },
-            required: ["visual_prompt", "title", "description"]
-          }
-        }
-      });
+      await updateStatus(25, "🔍 正在聯繫 Gemini 構思劇本...");
 
       let metadata;
       try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `你是一位短影音行銷大師。請針對 Niche: ${channel.niche} 使用語言: ${targetLang} 產出一個具備病毒式傳播潛力的 YouTube Short 企劃。`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                visual_prompt: { type: Type.STRING },
+                title: { type: Type.STRING },
+                description: { type: Type.STRING }
+              },
+              required: ["visual_prompt", "title", "description"]
+            },
+            // 使用較低的溫度確保穩定性
+            temperature: 0.2
+          }
+        });
+        
         const text = response.text || '';
         metadata = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
-      } catch (parseErr) {
-        console.error("Gemini Response Raw:", response.text);
-        throw new Error("AI 回傳劇本格式錯誤，無法解析。");
+      } catch (geminiErr: any) {
+        console.error("[Gemini Error Detail]", geminiErr);
+        // 特殊處理 429 錯誤
+        if (geminiErr.status === 429 || geminiErr.message?.includes('429') || geminiErr.message?.includes('quota')) {
+          throw new Error("API 額度已耗盡 (429 Resource Exhausted)。請檢查 API Key 帳單或等待一分鐘後重試。");
+        }
+        throw new Error(`Gemini 構思失敗: ${geminiErr.message}`);
       }
 
-      // 步驟 3：Veo 影片渲染
-      await updateStatus(45, "🎬 正在啟動 Veo 3.1 渲染垂直影片 (預計 120-180 秒)...");
+      await updateStatus(45, "🎬 正在啟動 Veo 渲染影片 (預計 2-3 分鐘)...");
       let operation = await ai.models.generateVideos({
         model: 'veo-3.1-fast-generate-preview',
         prompt: metadata.visual_prompt,
@@ -104,37 +102,35 @@ export default async function handler(req: any, res: any) {
       });
 
       let attempts = 0;
-      while (!operation.done && attempts < 50) {
-        await new Promise(r => setTimeout(r, 8000));
+      while (!operation.done && attempts < 60) {
+        await new Promise(r => setTimeout(r, 10000));
         operation = await ai.operations.getVideosOperation({ operation });
         attempts++;
-        await updateStatus(Math.min(90, 45 + (attempts * 1)), `🎬 影片生成中 (${attempts * 8}秒)...`);
+        await updateStatus(Math.min(95, 45 + attempts), `🎬 影片生成中 (${attempts * 10}秒)...`);
       }
 
-      if (!operation.done) throw new Error("影片渲染時間超過 400 秒，已自動放棄。");
+      if (!operation.done) throw new Error("影片渲染超時。");
 
-      // 步驟 4：下載與處理
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
       const videoFetch = await fetch(`${downloadLink}&key=${API_KEY}`);
       if (!videoFetch.ok) throw new Error("影片下載失敗。");
       const videoBuffer = Buffer.from(await videoFetch.arrayBuffer());
 
-      // 步驟 5：YouTube 上傳 (如果有的話)
       if (channel.auth?.access_token) {
-        await updateStatus(95, "🚀 正在發布至 YouTube 頻道...");
-        const boundary = '-------ONYX_PIPELINE_BOUNDARY';
+        await updateStatus(95, "🚀 正在發布至 YouTube...");
+        const boundary = '-------PIPELINE_BOUNDARY';
         const metadataPart = JSON.stringify({
-          snippet: { title: metadata.title, description: metadata.description + "\n#shorts #ai #onyx" },
+          snippet: { title: metadata.title, description: metadata.description },
           status: { privacyStatus: "public" }
         });
         const multipartBody = Buffer.concat([
-          Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadataPart}\r\n`),
+          Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n${metadataPart}\r\n`),
           Buffer.from(`--${boundary}\r\nContent-Type: video/mp4\r\n\r\n`),
           videoBuffer,
           Buffer.from(`\r\n--${boundary}--`)
         ]);
 
-        const uploadRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
+        await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${channel.auth.access_token}`,
@@ -142,32 +138,28 @@ export default async function handler(req: any, res: any) {
           },
           body: multipartBody
         });
-        if (!uploadRes.ok) console.warn("YouTube 上傳失敗，但影片已生成。");
       }
 
-      // 成功結束
-      await updateStatus(100, "✅ 任務大功告成", 'success');
+      await updateStatus(100, "✅ 任務完成", 'success');
       
-      // 清理頻道狀態為待命
-      setTimeout(async () => {
-        const finalRes = await fetch(DB_URL);
-        const historyData = await finalRes.json();
-        const finalUpdated = (Array.isArray(historyData) ? historyData : Object.values(historyData)).map((c: any) => {
-          if (c.id === channel.id) {
-            const hist = c.history || [];
-            hist.unshift({ title: metadata.title, publishedAt: new Date().toISOString() });
-            return { ...c, history: hist.slice(0, 10), status: 'idle', step: 0, lastLog: '待命' };
-          }
-          return c;
-        });
-        await fetch(DB_URL, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(finalUpdated) });
-      }, 5000);
+      // 最後清理並更新歷史紀錄
+      const finalRes = await fetch(DB_URL!);
+      const rawData = await finalRes.json();
+      const channels = Array.isArray(rawData) ? rawData : Object.values(rawData);
+      const finalUpdated = channels.map((c: any) => {
+        if (c.id === channel.id) {
+          const hist = c.history || [];
+          hist.unshift({ title: metadata.title, publishedAt: new Date().toISOString() });
+          return { ...c, history: hist.slice(0, 10), status: 'idle', step: 0, lastLog: '待命' };
+        }
+        return c;
+      });
+      await fetch(DB_URL!, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(finalUpdated) });
 
       return res.status(200).json({ success: true });
-
     }
   } catch (e: any) {
-    console.error("[PIPELINE CRITICAL]", e.message);
+    console.error("[PIPELINE FATAL]", e);
     await updateStatus(0, `❌ 錯誤: ${e.message}`, 'error');
     return res.status(200).json({ success: false, error: e.message });
   }

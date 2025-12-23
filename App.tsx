@@ -73,7 +73,7 @@ const App: React.FC = () => {
 
   const triggerPipeline = async (channel: ChannelConfig) => {
     if (channel.status === 'running') return;
-    addLog(`🚀 啟動全自動流程: ${channel.name}...`);
+    addLog(`🚀 啟動任務: ${channel.name}...`);
     
     setChannels(prev => prev.map(c => 
       c.id === channel.id ? { ...c, status: 'running', step: 5, lastLog: '正在連線伺服器...' } : c
@@ -89,33 +89,36 @@ const App: React.FC = () => {
       const data = await res.json();
       if (!data.success) {
         addLog(`❌ 執行失敗: ${data.error}`);
+        // 立刻更新前端狀態，避免 UI 假死
         setChannels(prev => prev.map(c => 
-          c.id === channel.id ? { ...c, status: 'error', lastLog: data.error } : c
+          c.id === channel.id ? { ...c, status: 'error', lastLog: data.error, step: 0 } : c
         ));
       } else {
-        addLog(`✅ ${channel.name} 任務已移交後端背景執行。`);
+        addLog(`✅ ${channel.name} 背景任務啟動。`);
       }
     } catch (e: any) {
       addLog(`❌ 網路錯誤: ${e.message}`);
       setChannels(prev => prev.map(c => 
-        c.id === channel.id ? { ...c, status: 'error', lastLog: '連線超時' } : c
+        c.id === channel.id ? { ...c, status: 'error', lastLog: '連線異常', step: 0 } : c
       ));
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('確定要移除此頻道？')) return;
+    if (!confirm('確定要移除此頻道配置？')) return;
     const next = channels.filter(c => c.id !== id);
     setChannels(next);
     localStorage.setItem('onyx_local_channels', JSON.stringify(next));
     if (storageMode === 'cloud') {
-      await fetch(getApiUrl('/api/db?action=sync'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channels: next })
-      });
+      try {
+        await fetch(getApiUrl('/api/db?action=sync'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channels: next })
+        });
+        addLog("🗑️ 頻道已從雲端移除");
+      } catch (e) { addLog(`❌ 雲端同步失敗`); }
     }
-    addLog("🗑️ 頻道已移除");
   };
 
   const handleEdit = (c: ChannelConfig) => {
@@ -153,7 +156,7 @@ const App: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ channels: next })
         });
-        addLog("☁️ 資料已同步至雲端");
+        addLog("☁️ 資料已同步");
       } catch (e) { addLog(`❌ 雲端同步失敗`); }
     }
     setIsModalOpen(false);
@@ -165,65 +168,72 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#050505] flex flex-col text-zinc-100">
-      <nav className="p-6 border-b border-zinc-800 bg-[#080808]/90 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center">
+      <nav className="p-6 border-b border-zinc-800 bg-[#080808]/90 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center shadow-2xl">
         <div className="flex items-center gap-6">
-          <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center font-black text-black text-lg italic shadow-lg">S</div>
+          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center font-black text-black text-xl italic shadow-lg">S</div>
           <div>
-            <h1 className="text-xl font-black text-white italic tracking-tighter uppercase">ShortsPilot <span className="text-cyan-400">ONYX</span></h1>
-            <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${storageMode === 'cloud' ? 'text-cyan-400 border-cyan-800 bg-cyan-950' : 'text-amber-400 border-amber-800 bg-amber-950'} border mt-1 block w-fit`}>
-              {storageMode === 'cloud' ? 'Cloud Link' : 'Local Only'}
+            <h1 className="text-2xl font-black text-white italic tracking-tighter uppercase">ShortsPilot <span className="text-cyan-400">ONYX</span></h1>
+            <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${storageMode === 'cloud' ? 'text-cyan-400 border-cyan-800 bg-cyan-950' : 'text-amber-400 border-amber-800 bg-amber-950'} border mt-2 block w-fit shadow-lg`}>
+              {storageMode === 'cloud' ? 'Cloud Sync' : 'Local Offline'}
             </span>
           </div>
         </div>
         <div className="flex gap-4">
-           <button onClick={() => setShowGAS(true)} className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-lg font-bold border border-zinc-800 text-xs">GAS 排程</button>
-           <button onClick={() => { setIsModalOpen(true); setEditingId(null); setNewChan({ name: '', niche: 'AI 科技', language: 'zh-TW', schedule: { ...defaultSchedule } }); }} className="px-6 py-2 bg-white text-black rounded-lg font-black shadow-lg hover:scale-105 transition-all text-xs">新增頻道</button>
+           <button onClick={() => setShowGAS(true)} className="px-5 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 rounded-lg font-bold border border-zinc-700 transition-colors">GAS 部署</button>
+           <button onClick={() => { setIsModalOpen(true); setEditingId(null); setNewChan({ name: '', niche: 'AI 科技', language: 'zh-TW', schedule: { ...defaultSchedule } }); }} className="px-8 py-2.5 bg-white text-black rounded-lg font-black shadow-xl hover:scale-105 transition-all">新增頻道</button>
         </div>
       </nav>
 
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        <main className="flex-1 p-6 overflow-y-auto">
-          <div className="max-w-4xl mx-auto space-y-8">
-            {isLoading && <div className="text-center py-20 animate-pulse text-zinc-600 font-black uppercase text-xs tracking-[0.3em]">Grid Accessing...</div>}
+        <main className="flex-1 p-8 overflow-y-auto">
+          <div className="max-w-4xl mx-auto space-y-12">
+            {isLoading && <div className="text-center py-20 animate-pulse text-zinc-500 font-black uppercase tracking-[0.3em]">Syncing with Grid...</div>}
             
             {channels.map(c => (
-              <div key={c.id} className="onyx-card rounded-[2.5rem] p-10 relative group border-zinc-800 border hover:border-zinc-700 transition-all shadow-2xl">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                  <div className="space-y-4 flex-1">
+              <div key={c.id} className="onyx-card rounded-[3.5rem] p-12 transition-all relative group border-zinc-800 border hover:border-cyan-900/50 shadow-2xl">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+                  <div className="space-y-6 flex-1">
                     <div className="flex items-center gap-4">
-                      <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter">{c.name}</h2>
-                      <span className={`text-[9px] px-2.5 py-0.5 rounded-full font-black uppercase tracking-widest ${c.status === 'running' ? 'bg-cyan-500 text-black animate-pulse' : c.status === 'error' ? 'bg-red-500 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
-                        {c.status === 'running' ? 'Active' : c.status === 'error' ? 'Alert' : 'Idle'}
+                      <h2 className="text-4xl font-black text-white italic uppercase tracking-tighter">{c.name}</h2>
+                      <span className={`text-[9px] px-3 py-1 rounded-full font-black uppercase tracking-widest ${c.status === 'running' ? 'bg-cyan-500 text-black animate-pulse shadow-[0_0_15px_rgba(6,182,212,0.5)]' : c.status === 'error' ? 'bg-red-500 text-white shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'bg-zinc-800 text-zinc-400'}`}>
+                        {c.status === 'running' ? 'Active' : c.status === 'error' ? 'System Error' : 'Standby'}
                       </span>
                     </div>
-                    <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">Niche: <span className="text-zinc-300">{c.niche}</span></p>
+                    <p className="text-xs text-zinc-500 font-bold uppercase tracking-[0.2em]">Niche: <span className="text-zinc-300">{c.niche}</span></p>
                   </div>
 
-                  <div className="flex gap-3">
-                     <button onClick={() => handleEdit(c)} className="w-10 h-10 flex items-center justify-center rounded-xl bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800 transition-all">✎</button>
-                     <button onClick={() => handleDelete(c.id)} className="w-10 h-10 flex items-center justify-center rounded-xl bg-zinc-900 text-red-900/50 hover:text-red-500 border border-zinc-800 transition-all">✕</button>
+                  <div className="flex gap-4">
+                     {/* 回歸功能：編輯與刪除按鈕 */}
+                     <button onClick={() => handleEdit(c)} className="w-14 h-14 flex items-center justify-center rounded-2xl bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 transition-all text-xl" title="編輯頻道">✎</button>
+                     <button onClick={() => handleDelete(c.id)} className="w-14 h-14 flex items-center justify-center rounded-2xl bg-zinc-900 text-red-900/40 hover:text-red-500 border border-zinc-800 hover:border-red-900 transition-all text-xl" title="刪除頻道">✕</button>
+                     
                      <button 
                       onClick={() => triggerPipeline(c)}
                       disabled={c.status === 'running'}
-                      className={`flex items-center gap-2 px-8 py-3 rounded-2xl font-black uppercase tracking-widest text-[10px] transition-all ${c.status === 'running' ? 'bg-zinc-900 text-zinc-700 cursor-not-allowed border border-zinc-800' : 'bg-cyan-500 text-black hover:scale-105 shadow-xl'}`}
+                      className={`group flex items-center gap-3 px-10 py-6 rounded-3xl font-black uppercase tracking-widest text-xs transition-all ${c.status === 'running' ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800' : 'bg-cyan-500 text-black hover:scale-105 shadow-[0_0_30px_rgba(6,182,212,0.3)]'}`}
                      >
-                       {c.status === 'running' ? 'Executing' : 'Deploy'}
+                       <span>{c.status === 'running' ? '⚙️' : '▶'}</span>
+                       {c.status === 'running' ? 'Running' : 'Deploy'}
                      </button>
                   </div>
                 </div>
 
                 {(c.status === 'running' || c.status === 'error' || (c.step || 0) > 0) && (
-                  <div className="mt-8 pt-8 border-t border-zinc-800/50 space-y-4">
+                  <div className="mt-10 pt-10 border-t border-zinc-800/50 space-y-6">
                     <div className="flex justify-between items-end">
-                      <div className="space-y-1">
-                        <p className={`text-[9px] font-black uppercase tracking-widest ${c.status === 'error' ? 'text-red-500' : 'text-zinc-600'}`}>System Message</p>
-                        <p className={`text-xs font-bold italic ${c.status === 'error' ? 'text-red-400' : 'text-cyan-400'}`}>{c.lastLog || '等待同步...'}</p>
+                      <div className="space-y-2">
+                        <p className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ${c.status === 'error' ? 'text-red-500' : 'text-zinc-500'}`}>
+                          Mission Pulse
+                        </p>
+                        <p className={`text-sm font-bold italic px-3 py-1 rounded-lg border w-fit ${c.status === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/30' : 'bg-cyan-400/5 text-cyan-400 border-cyan-400/20'}`}>
+                           {c.lastLog || '等待指令...'}
+                        </p>
                       </div>
-                      <span className="text-2xl font-black font-mono text-white italic">{c.step || 0}%</span>
+                      <span className="text-3xl font-black font-mono text-white italic tracking-tighter">{c.step || 0}%</span>
                     </div>
-                    <div className="h-2.5 bg-black rounded-full overflow-hidden border border-zinc-800">
+                    <div className="h-4 bg-black rounded-full overflow-hidden border border-zinc-800 p-1">
                       <div 
-                        className={`h-full transition-all duration-1000 ease-out ${c.status === 'error' ? 'bg-red-600' : 'bg-cyan-500'}`}
+                        className={`h-full rounded-full transition-all duration-1000 ease-out relative overflow-hidden ${c.status === 'error' ? 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.5)]' : 'bg-gradient-to-r from-cyan-600 to-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.5)]'}`}
                         style={{ width: `${c.step || 0}%` }}
                       ></div>
                     </div>
@@ -231,40 +241,31 @@ const App: React.FC = () => {
                 )}
               </div>
             ))}
-
-            {channels.length === 0 && !isLoading && (
-              <div className="py-20 text-center border-2 border-dashed border-zinc-900 rounded-[3rem] text-zinc-700 font-bold uppercase text-xs">No Core Configured.</div>
-            )}
           </div>
         </main>
 
-        <aside className="w-96 border-l border-zinc-800 bg-[#080808] p-8 flex flex-col shadow-2xl">
-          <h4 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.4em] mb-8 text-center">Intelligence Log</h4>
-          <div className="space-y-3 font-mono text-[9px] flex-1 overflow-y-auto pr-2 scrollbar-thin">
+        <aside className="w-96 border-l border-zinc-800 bg-[#080808] p-10 flex flex-col shadow-2xl">
+          <h4 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.5em] mb-10 text-center">Intelligence Log</h4>
+          <div className="space-y-3 font-mono text-[9px] flex-1 overflow-y-auto pr-4 scrollbar-thin">
             {globalLog.map((log, i) => (
-              <div key={i} className={`p-4 bg-[#0a0a0a] border border-zinc-900 rounded-2xl text-zinc-500 border-l-2 ${log.includes('❌') ? 'border-l-red-500 text-red-400' : log.includes('✅') ? 'border-l-emerald-500 text-emerald-400' : 'border-l-cyan-500/20'}`}>{log}</div>
+              <div key={i} className={`p-4 bg-[#0a0a0a] border border-zinc-900 rounded-2xl text-zinc-400 border-l-2 ${log.includes('❌') ? 'border-l-red-500 text-red-300' : log.includes('✅') ? 'border-l-emerald-500 text-emerald-300' : 'border-l-cyan-500/30'}`}>{log}</div>
             ))}
+            {globalLog.length === 0 && <div className="text-zinc-800 italic text-center">Standby for Signal...</div>}
           </div>
         </aside>
       </div>
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-lg rounded-[3.5rem] p-12 space-y-8 shadow-2xl">
-            <h3 className="text-2xl font-black italic uppercase text-white">{editingId ? 'Modify System' : 'Init System'}</h3>
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest px-2">Channel Identifier</label>
-                <input type="text" placeholder="YouTube 名稱" className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-bold text-sm" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest px-2">Market Niche</label>
-                <input type="text" placeholder="例如: 療癒貓咪, 3D 列印, 金融冷知識" className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-bold text-sm" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} />
-              </div>
+          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-xl rounded-[4rem] p-16 space-y-10 shadow-2xl">
+            <h3 className="text-3xl font-black italic uppercase text-white">{editingId ? 'Modify Core' : 'Init New Core'}</h3>
+            <div className="space-y-8">
+              <input type="text" placeholder="Channel Name" className="w-full bg-black border border-zinc-800 p-6 rounded-3xl outline-none focus:border-cyan-500 transition-all text-white font-bold" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} />
+              <input type="text" placeholder="Niche (e.g. 貓咪、科技、美食)" className="w-full bg-black border border-zinc-800 p-6 rounded-3xl outline-none focus:border-cyan-500 transition-all text-white font-bold" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} />
             </div>
-            <div className="flex gap-4 pt-4">
-              <button onClick={() => setIsModalOpen(false)} className="flex-1 p-5 text-zinc-600 font-black uppercase tracking-widest text-[10px] hover:text-white">Cancel</button>
-              <button onClick={saveChannel} className="flex-1 p-5 bg-white text-black rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:scale-105 transition-all">Confirm</button>
+            <div className="flex gap-6 pt-6">
+              <button onClick={() => setIsModalOpen(false)} className="flex-1 p-6 text-zinc-600 font-black uppercase tracking-widest text-[10px] hover:text-white transition-colors">Cancel</button>
+              <button onClick={saveChannel} className="flex-1 p-7 bg-white text-black rounded-[2rem] font-black uppercase tracking-widest text-[10px] shadow-2xl hover:scale-105 transition-all">Save Change</button>
             </div>
           </div>
         </div>
@@ -272,10 +273,10 @@ const App: React.FC = () => {
 
       {showGAS && (
         <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[110] flex items-center justify-center p-6">
-          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-2xl rounded-[3rem] p-12 space-y-8 shadow-2xl">
-            <h3 className="text-xl font-black italic uppercase text-white tracking-widest">Script Deployment</h3>
-            <pre className="bg-black p-8 rounded-3xl text-[10px] font-mono text-cyan-500 border border-zinc-900 overflow-x-auto select-all leading-relaxed">{generateGASScript()}</pre>
-            <button onClick={() => setShowGAS(false)} className="w-full p-6 bg-white text-black rounded-2xl font-black uppercase text-[10px]">Close Console</button>
+          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-3xl rounded-[4rem] p-16 space-y-10 shadow-2xl">
+            <h3 className="text-2xl font-black italic uppercase text-white tracking-widest">Deployment Console</h3>
+            <pre className="bg-black p-10 rounded-[2.5rem] text-xs font-mono text-cyan-400 border border-zinc-900 overflow-x-auto select-all">{generateGASScript()}</pre>
+            <button onClick={() => setShowGAS(false)} className="w-full p-8 bg-white text-black rounded-3xl font-black uppercase text-xs">Dismiss</button>
           </div>
         </div>
       )}
