@@ -6,14 +6,6 @@ export interface ScheduleConfig {
   autoEnabled: boolean;
 }
 
-// History record for uploaded videos used in ChannelConfig
-export interface ChannelHistory {
-  title: string;
-  videoId: string;
-  url: string;
-  publishedAt: string;
-}
-
 export interface ChannelConfig {
   id: string;
   name: string;
@@ -27,8 +19,6 @@ export interface ChannelConfig {
   language?: 'zh-TW' | 'en';
   schedule?: ScheduleConfig; // 新增排程設定
   lastRunTime?: number; // 紀錄上次執行時間避免重複
-  // Added history property to resolve type errors in App.tsx
-  history?: ChannelHistory[];
 }
 
 export interface PipelineMetadata {
