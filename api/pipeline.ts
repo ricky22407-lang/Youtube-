@@ -13,17 +13,29 @@ export default async function handler(req: any, res: any) {
   const { stage, channel, metadata } = req.body;
   const API_KEY = process.env.API_KEY;
 
-  if (!API_KEY) return res.status(200).json({ success: false, error: 'API_KEY Missing' });
+  if (!API_KEY) return res.status(200).json({ success: false, error: 'System API_KEY Missing' });
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
 
   try {
     switch (stage) {
       case 'analyze': {
+        const lang = channel.language || 'zh-TW';
+        const niches = channel.niche || 'General';
+        
         const promptRes = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Channel Niche: ${channel.niche}. Task: Create a high-engagement viral YouTube Shorts script. 
-          Return JSON with fields: prompt (for video AI), title (viral), desc (hashtags).`,
+          contents: `核心利基(可能是多個): ${niches}. 
+          指定輸出語言: ${lang === 'zh-TW' ? '繁體中文 (Traditional Chinese)' : 'English (United States)'}.
+          任務: 針對上述利基（若有多個可選擇其中一個或創意組合），創作一個具有高度病毒式傳播潛力的 YouTube Shorts 企劃。
+          
+          【內容過濾與寫作規則】：
+          1. 標題與描述中【嚴格禁止】使用 #AI, #ArtificialIntelligence, #Bot, #ShortsPilot 或任何與技術性、自動化相關的標籤。
+          2. 請使用與該利基領域（Niche）相關的「人性化」標籤。
+          3. 內容風格：要像真人撰寫，富有好奇心、幽默感或實用性。
+          4. 避免過於機械化或重複的語法結構。
+          
+          請回傳 JSON 格式，包含: prompt (給影片生成的視覺描述), title (病毒式標題), desc (人性化影片描述 + 相關標籤)。`,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
@@ -41,7 +53,7 @@ export default async function handler(req: any, res: any) {
       }
 
       case 'render_and_upload': {
-        if (!channel.auth?.access_token) throw new Error("Missing YouTube Authorization.");
+        if (!channel.auth?.access_token) throw new Error("YouTube 授權遺失。");
 
         // 1. Veo 影片生成 (9:16)
         let operation = await ai.models.generateVideos({
@@ -51,25 +63,25 @@ export default async function handler(req: any, res: any) {
         });
 
         let attempts = 0;
-        // Veo 生成通常需要 2-3 分鐘，增加輪詢次數
-        while (!operation.done && attempts < 20) {
-          await new Promise(r => setTimeout(r, 20000)); // 20s 間隔
+        // Veo 生成通常需要 2-4 分鐘
+        while (!operation.done && attempts < 25) {
+          await new Promise(r => setTimeout(r, 20000));
           operation = await ai.operations.getVideosOperation({ operation });
           attempts++;
         }
 
-        if (!operation.done) throw new Error("Video rendering exceeded time limit.");
+        if (!operation.done) throw new Error("影片生成時間過長，伺服器超時。");
 
         const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
         const videoRes = await fetch(`${downloadLink}&key=${API_KEY}`);
         const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
         
-        // 2. YouTube Multipart Upload
+        // 2. YouTube Multipart 上傳 (不含技術標籤)
         const boundary = '-------PIPELINE_ONYX_V8_UPLOAD_BOUNDARY';
         const jsonMetadata = JSON.stringify({
           snippet: { 
             title: metadata.title, 
-            description: `${metadata.desc}\n\n#AI #Shorts #Automation`, 
+            description: `${metadata.desc}\n\n#Viral #Content`, 
             categoryId: "22" 
           },
           status: { privacyStatus: "public", selfDeclaredMadeForKids: false }
@@ -93,7 +105,7 @@ export default async function handler(req: any, res: any) {
         });
 
         const uploadData = await uploadRes.json();
-        if (uploadData.error) throw new Error(`YouTube API Error: ${uploadData.error.message}`);
+        if (uploadData.error) throw new Error(`YouTube API 錯誤: ${uploadData.error.message}`);
         
         return res.status(200).json({ success: true, videoId: uploadData.id });
       }
@@ -102,7 +114,6 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ error: 'Invalid Stage' });
     }
   } catch (e: any) {
-    console.error("Pipeline Error:", e.message);
     return res.status(200).json({ success: false, error: e.message });
   }
 }
