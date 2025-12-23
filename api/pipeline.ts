@@ -25,19 +25,18 @@ export default async function handler(req: any, res: any) {
         
         const promptRes = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `核心利基群組: ${rawNiches}. 
+          contents: `核心利基(可能是多個關鍵字): ${rawNiches}. 
           指定輸出語言: ${lang === 'zh-TW' ? '繁體中文 (Traditional Chinese)' : 'English (US)'}.
           
-          任務：
-          1. 從上述利基群組中，隨機選擇一個或將多個進行「跨界聯動」創意。
-          2. 構思一個能引發病毒式傳播的 YouTube Shorts 企劃。
+          任務說明：
+          1. 如果輸入包含多個利基，請從中隨機挑選 1-2 個進行創意「跨界聯動」(例如: 機器人+貓)。
+          2. 創作一個極具吸引力的 YouTube Shorts 企劃。
           
-          【寫作規範】：
-          - 嚴禁標籤：標題與敘述絕對不能出現 #AI, #Bot, #ShortsPilot 等技術標籤。
-          - 人性化風格：標題要吸引人（Click-baity），敘述要像真人分享。
-          - 標籤建議：請使用與內容直接相關的流行標籤。
+          【嚴格寫作限制】：
+          - 標題與描述絕對禁止出現 #AI, #Bot, #ShortsPilot 等技術標籤。
+          - 內容要像真人寫的，風格可以幽默、驚悚或感人。
           
-          回傳 JSON：{ "prompt": "給影片生成的視覺指令", "title": "吸睛標題", "desc": "人性化影片敘述" }`,
+          請回傳 JSON：{ "prompt": "給 Veo 影片生成的視覺提示詞", "title": "病毒式標題", "desc": "人性化影片描述+利基相關標籤" }`,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
@@ -70,7 +69,7 @@ export default async function handler(req: any, res: any) {
           attempts++;
         }
 
-        if (!operation.done) throw new Error("影片渲染超時，請重新執行。");
+        if (!operation.done) throw new Error("影片渲染逾時。");
 
         const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
         const videoRes = await fetch(`${downloadLink}&key=${API_KEY}`);
