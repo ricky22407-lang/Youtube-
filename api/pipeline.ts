@@ -15,36 +15,10 @@ export default async function handler(req: any, res: any) {
 
   try {
     switch (stage) {
-      case 'suggest_schedule': {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: `身為 YouTube 短影音專家，針對主題「${channel.niche}」，分析全球觀眾觀看大數據，提供最佳上片建議。
-          請產出 JSON：
-          {
-            "days": [1, 3, 5], // 0-6 代表週日至週六
-            "time": "18:30",
-            "count": 1,
-            "reason": "為什麼這個時間最好？"
-          }`,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                days: { type: Type.ARRAY, items: { type: Type.INTEGER } },
-                time: { type: Type.STRING },
-                count: { type: Type.INTEGER },
-                reason: { type: Type.STRING }
-              },
-              required: ["days", "time", "count", "reason"]
-            }
-          }
-        });
-        return res.status(200).json({ success: true, suggestion: JSON.parse(response.text || '{}') });
-      }
-
       case 'analyze': {
-        const langName = channel.language === 'en' ? 'English' : '繁體中文';
+        const lang = channel.language || 'zh-TW';
+        const targetLang = lang === 'en' ? 'English' : 'Traditional Chinese (繁體中文)';
+        
         const q = encodeURIComponent(`#shorts ${channel.niche}`);
         const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&maxResults=5&order=viewCount&key=${process.env.API_KEY}`);
         const searchData = await searchRes.json();
@@ -52,15 +26,18 @@ export default async function handler(req: any, res: any) {
 
         const promptRes = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `趨勢：${trends}。主題：${channel.niche}。語言：${langName}。產出爆款企劃 JSON，標題描述要口語自然。`,
+          contents: `Trends: ${trends}. Niche: ${channel.niche}. Output Language: ${targetLang}. 
+          Task: Create a viral YouTube Shorts script. 
+          The "title" and "desc" fields MUST be in ${targetLang}.
+          The "prompt" field should be in English for the video generator.`,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                prompt: { type: Type.STRING },
-                title: { type: Type.STRING },
-                desc: { type: Type.STRING }
+                prompt: { type: Type.STRING, description: "Visual description for Veo AI" },
+                title: { type: Type.STRING, description: "Viral Title" },
+                desc: { type: Type.STRING, description: "Short description with hashtags" }
               },
               required: ["prompt", "title", "desc"]
             }
@@ -88,7 +65,7 @@ export default async function handler(req: any, res: any) {
         const boundary = '-------314159265358979323846';
         const metadataPart = JSON.stringify({
           snippet: {
-            title: metadata.title || "New Short",
+            title: metadata.title || "New AI Short",
             description: metadata.desc || "",
             categoryId: "22"
           },
