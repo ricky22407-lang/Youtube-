@@ -28,12 +28,14 @@ const sleep = (ms: number, signal?: AbortSignal) => {
 
 const App: React.FC = () => {
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
+  const channelsRef = useRef<ChannelConfig[]>([]);
+  useEffect(() => { channelsRef.current = channels; }, [channels]);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isEngineActive, setIsEngineActive] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<'connected' | 'disconnected'>('disconnected');
   
-  // 核心控制變數，使用 Ref 確保讀取到最新值，不受 React 渲染週期限制
   const isRenderingRef = useRef(false);
   const [isAnyChannelRendering, setIsAnyChannelRendering] = useState(false);
   
@@ -53,7 +55,6 @@ const App: React.FC = () => {
     }
   });
 
-  // 1. 初始化 Firebase
   useEffect(() => {
     try {
       const app = initializeApp(firebaseConfig);
@@ -64,21 +65,17 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // 2. 穩定的定時器：只在引擎開關切換時重新啟動
   useEffect(() => {
     let timer: any;
     if (isEngineActive) {
-      addLog("🚀 引擎啟動：進入 30s 掃描循環");
-      // 首次立即檢查
+      addLog("🚀 自動排程引擎啟動 (30s 輪詢間隔)");
       checkSchedules();
       timer = setInterval(() => {
         checkSchedules();
       }, 30000);
     }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [isEngineActive]); // 僅依賴引擎開關
+    return () => { if (timer) clearInterval(timer); };
+  }, [isEngineActive]);
 
   useEffect(() => {
     const saved = localStorage.getItem('pilot_onyx_v8_data');
@@ -89,33 +86,58 @@ const App: React.FC = () => {
     localStorage.setItem('pilot_onyx_v8_data', JSON.stringify(channels));
   }, [channels]);
 
-  // 更新渲染狀態的輔助函式，同步更新 Ref 與 State
   const setRenderingState = (val: boolean) => {
     isRenderingRef.current = val;
     setIsAnyChannelRendering(val);
   };
 
+  /**
+   * 系統淨化 (Hard Reset)
+   * 用於解決任何 UI 卡死、狀態異常或需要重新配置的情況
+   */
+  const systemPurge = () => {
+    const confirm1 = window.confirm("⚠️ 警告：這將會終止所有執行中任務並清除所有頻道資料，確定執行「系統淨化」嗎？");
+    if (!confirm1) return;
+
+    const confirm2 = window.prompt("請輸入「PURGE」以確認執行硬核重置：");
+    if (confirm2 !== "PURGE") {
+      alert("驗證失敗，取消操作。");
+      return;
+    }
+
+    // 1. 終止所有 fetch 請求
+    Object.values(abortControllers.current).forEach(ctrl => ctrl.abort());
+    abortControllers.current = {};
+
+    // 2. 清除持久化資料
+    localStorage.removeItem('pilot_onyx_v8_data');
+
+    // 3. 重置所有狀態
+    setChannels([]);
+    setIsEngineActive(false);
+    setRenderingState(false);
+    setGlobalLog([`[${new Date().toLocaleTimeString()}] 🛡️ 系統已成功淨化，核心重置完成。`]);
+    
+    addLog("✅ 系統已重置為初始狀態");
+  };
+
   const toggleEngine = () => {
     const newStatus = !isEngineActive;
     setIsEngineActive(newStatus);
-    if (newStatus) {
-      if (audioRef.current) audioRef.current.play().catch(() => {});
-    } else {
+    if (!newStatus) {
       if (audioRef.current) audioRef.current.pause();
-      addLog("🛑 引擎已停機");
+      addLog("🛑 引擎已關閉");
     }
   };
 
   const checkSchedules = () => {
-    // 嚴格鎖定：如果有人在跑，連掃描都不要做，徹底保護 RPM
     if (isRenderingRef.current) return;
 
     const now = new Date();
     const currentDay = now.getDay();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
-    // 使用傳統 for 迴圈以便隨時 break，實作順序觸發
-    for (const channel of channels) {
+    for (const channel of channelsRef.current) {
       if (!channel.autoDeploy || !channel.weeklySchedule || channel.status === 'running') continue;
 
       const isToday = channel.weeklySchedule.days.includes(currentDay);
@@ -123,33 +145,26 @@ const App: React.FC = () => {
       const slotId = `${currentDay}_${currentTime}`;
 
       if (isToday && isCorrectTime && channel.lastTriggeredSlot !== slotId) {
-        addLog(`⏰ 偵測到匹配時段: ${channel.name}，準備發動任務...`);
         runPipeline(channel, slotId);
-        // 重要：一輪掃描只啟動一個頻道，其餘的等 30 秒後的下一輪
         break; 
       }
-    }
-
-    if (dbRef.current && isEngineActive) {
-      set(ref(dbRef.current, 'system/heartbeat'), {
-        last_check: serverTimestamp(),
-        is_busy: isRenderingRef.current
-      });
     }
   };
 
   const abortPipeline = (id: string) => {
     if (abortControllers.current[id]) {
       abortControllers.current[id].abort();
-      addLog(`⚡ 任務強制終止: ${id}`);
-      setChannels(p => p.map(c => c.id === id ? { ...c, status: 'idle', lastLog: '任務已手動取消', step: 0 } : c));
+      addLog(`⚡ 強制中斷任務: ${id}`);
+      setChannels(p => p.map(c => c.id === id ? { ...c, status: 'idle', lastLog: '已手動中斷', step: 0 } : c));
       setRenderingState(false);
-      delete abortControllers.current[id];
+    } else {
+      // 如果 Controller 失效但狀態卡死，點擊終止時強制手動重置該卡片
+      setChannels(p => p.map(c => c.id === id ? { ...c, status: 'idle', lastLog: '狀態強制重置', step: 0 } : c));
+      setRenderingState(false);
     }
   };
 
   const runPipeline = async (channel: ChannelConfig, slotId?: string) => {
-    // 雙重防禦鎖
     if (isRenderingRef.current) return;
     
     setRenderingState(true);
@@ -162,13 +177,13 @@ const App: React.FC = () => {
 
     update({ 
       status: 'running', 
-      step: 10, 
-      lastLog: '趨勢掃描中...',
+      step: 5, 
+      lastLog: '啟動初始化...',
       lastTriggeredSlot: slotId || channel.lastTriggeredSlot 
     });
 
     try {
-      // 階段 1: 分析 (文字生成 RPM 消耗處)
+      addLog(`▶ [${channel.name}] 開始執行分析...`);
       const r1 = await fetch('/api/pipeline', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
@@ -180,9 +195,12 @@ const App: React.FC = () => {
 
       if (controller.signal.aborted) return;
 
-      update({ step: 40, lastLog: 'Veo 渲染中 (啟動 120s 盲等機制)...' });
+      update({ step: 35, lastLog: '分析完成，API 保護冷卻 10 秒...' });
+      await sleep(10000, controller.signal);
 
-      // 階段 2: 渲染與上傳 (API 輪詢負載處)
+      addLog(`🎬 [${channel.name}] 開始渲染影片...`);
+      update({ step: 40, lastLog: 'Veo 渲染中...' });
+
       const r2 = await fetch('/api/pipeline', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
@@ -193,29 +211,27 @@ const App: React.FC = () => {
       
       if (!d2.success) {
         if (d2.isQuotaError) {
-          addLog("⚠️ API 429 觸發，系統自動進入 90s 冷卻期...");
-          update({ lastLog: 'API 限制，冷卻重試中...', step: 30 });
-          await sleep(90000, controller.signal);
-          setRenderingState(false);
-          return; // 結束本輪，等下一次 30s 掃描自動重試
+          addLog("⚠️ 觸發 RPM 限制，將在下一輪嘗試...");
+          update({ lastLog: 'API 限額重試中', status: 'idle', step: 0 });
+          return;
         }
         throw new Error(d2.error);
       }
 
       update({ 
         status: 'success', step: 100, 
-        lastLog: `發布成功: ${d2.videoId}`,
+        lastLog: `完成發布: ${d2.videoId}`,
         lastRun: new Date().toISOString()
       });
-      addLog(`✅ [${channel.name}] 流程圓滿結束`);
+      addLog(`✅ [${channel.name}] 任務圓滿完成`);
+
     } catch (e: any) {
-      if (e.name === 'AbortError') {
-        console.log("Abort success.");
-      } else {
-        update({ status: 'error', lastLog: `${e.message}`, step: 0 });
-        addLog(`❌ 核心故障: ${e.message}`);
-      }
+      if (e.name === 'AbortError') return;
+      update({ status: 'error', lastLog: `錯誤: ${e.message}`, step: 0 });
+      addLog(`❌ [${channel.name}] 失敗: ${e.message}`);
     } finally {
+      addLog("🛡️ 進入 30 秒安全冷卻期...");
+      await sleep(30000); 
       setRenderingState(false);
       delete abortControllers.current[channel.id];
     }
@@ -268,8 +284,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black flex flex-col text-white font-sans selection:bg-cyan-500">
-      <audio ref={audioRef} loop src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=" />
-
       <nav className="p-8 border-b border-zinc-900 flex justify-between items-center bg-black/80 backdrop-blur-xl sticky top-0 z-50">
         <div className="flex items-center gap-6">
           <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center font-black italic text-black text-xl shadow-[0_0_20px_rgba(255,255,255,0.2)]">S</div>
@@ -277,11 +291,14 @@ const App: React.FC = () => {
             <h1 className="text-2xl font-black italic uppercase tracking-tighter leading-none">ShortsPilot <span className="text-zinc-600">ONYX</span></h1>
             <div className="flex items-center gap-3 mt-2">
               <span className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`}></span>
-              <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest">System Status / {isEngineActive ? 'Engine On' : 'Engine Off'}</span>
+              <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest">Active Guard / {isEngineActive ? 'Engine On' : 'Engine Off'}</span>
             </div>
           </div>
         </div>
         <div className="flex gap-4">
+          <button onClick={systemPurge} className="px-6 py-3 border border-red-900/50 text-red-500/50 hover:text-red-500 hover:bg-red-500/10 rounded-full font-black text-[9px] uppercase tracking-widest transition-all">
+            System Purge
+          </button>
           <button onClick={toggleEngine} className={`px-8 py-3 rounded-full font-black text-[10px] uppercase tracking-widest border transition-all ${isEngineActive ? 'border-cyan-500 text-cyan-500 bg-cyan-500/10 shadow-[0_0_15px_rgba(6,182,212,0.2)]' : 'border-zinc-800 text-zinc-600'}`}>
             {isEngineActive ? 'System Live' : 'Ignite Engine'}
           </button>
@@ -296,7 +313,7 @@ const App: React.FC = () => {
           <div className="max-w-4xl mx-auto space-y-6">
             {channels.length === 0 && (
               <div className="text-center py-20 border-2 border-dashed border-zinc-900 rounded-[3rem]">
-                <p className="text-zinc-600 font-black uppercase tracking-[0.3em] text-[10px]">No active cores found. Please initialize a channel.</p>
+                <p className="text-zinc-600 font-black uppercase tracking-[0.3em] text-[10px]">No active cores. Protocol initialized.</p>
               </div>
             )}
             {channels.map(c => (
@@ -305,7 +322,7 @@ const App: React.FC = () => {
                   <div className="space-y-4">
                     <div className="flex items-center gap-4">
                       <h2 className="text-2xl font-black italic uppercase tracking-tight">{c.name}</h2>
-                      {c.autoDeploy && <span className="bg-cyan-500 text-black text-[8px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Cycle Active</span>}
+                      {c.autoDeploy && <span className="bg-cyan-500 text-black text-[8px] font-black px-3 py-1 rounded-full uppercase tracking-widest">Auto Cycle</span>}
                     </div>
                     
                     <div className="flex flex-wrap gap-2">
@@ -317,7 +334,7 @@ const App: React.FC = () => {
                       ))}
                     </div>
 
-                    <p className={`text-[11px] font-bold ${c.status === 'error' ? 'text-red-500' : 'text-zinc-600'}`}>{c.lastLog || 'Neural Network Ready'}</p>
+                    <p className={`text-[11px] font-bold ${c.status === 'error' ? 'text-red-500' : 'text-zinc-600'}`}>{c.lastLog || 'System Standby'}</p>
                   </div>
                   <div className="flex gap-4">
                     {c.status !== 'running' && (
@@ -325,10 +342,10 @@ const App: React.FC = () => {
                     )}
                     
                     {c.status === 'running' ? (
-                      <button onClick={() => abortPipeline(c.id)} className="px-10 py-5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-[10px] uppercase shadow-[0_0_20px_rgba(220,38,38,0.3)] transition-all animate-pulse">Force Abort</button>
+                      <button onClick={() => abortPipeline(c.id)} className="px-10 py-5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-[10px] uppercase shadow-[0_0_20px_rgba(220,38,38,0.3)] transition-all animate-pulse">Force Kill</button>
                     ) : (
                       <button disabled={isAnyChannelRendering} onClick={() => runPipeline(c)} className={`px-12 py-5 rounded-2xl font-black text-[10px] uppercase transition-all ${isAnyChannelRendering ? 'bg-zinc-900 text-zinc-700' : 'bg-white text-black hover:invert'}`}>
-                        {isAnyChannelRendering ? 'System Busy' : 'Deploy Now'}
+                        {isAnyChannelRendering ? 'Lockdown' : 'Launch'}
                       </button>
                     )}
                   </div>
@@ -339,7 +356,7 @@ const App: React.FC = () => {
                       <div className="h-full bg-cyan-500 transition-all duration-1000 shadow-[0_0_10px_#06b6d4]" style={{ width: `${c.step}%` }}></div>
                     </div>
                     <div className="flex justify-between items-center">
-                      <p className="text-[8px] text-zinc-700 uppercase font-black tracking-widest animate-pulse">Veo 3.1 Pipeline Processing...</p>
+                      <p className="text-[8px] text-zinc-700 uppercase font-black tracking-widest animate-pulse">Running Neural Pipeline...</p>
                       <span className="text-[10px] font-black text-cyan-500">{c.step}%</span>
                     </div>
                   </div>
@@ -352,15 +369,15 @@ const App: React.FC = () => {
         <aside className="w-full lg:w-[420px] border-l border-zinc-900 bg-black flex flex-col p-10">
           <div className="space-y-8">
             <div className="p-8 bg-zinc-950 rounded-[2.5rem] border border-zinc-900 space-y-4">
-              <h4 className="text-[10px] font-black text-cyan-500 uppercase tracking-widest">Platform Guard</h4>
+              <h4 className="text-[10px] font-black text-cyan-500 uppercase tracking-widest">RPM Safeguard</h4>
               <div className="space-y-3">
                 <div className="flex justify-between text-[11px] font-bold">
-                  <span className="text-zinc-600">Concurrency Lock</span>
-                  <span className={isAnyChannelRendering ? 'text-yellow-500' : 'text-green-500'}>{isAnyChannelRendering ? 'ACTIVE' : 'IDLE'}</span>
+                  <span className="text-zinc-600">Lock Status</span>
+                  <span className={isAnyChannelRendering ? 'text-yellow-500' : 'text-green-500'}>{isAnyChannelRendering ? 'LOCKDOWN' : 'UNLOCKED'}</span>
                 </div>
                 <div className="flex justify-between text-[11px] font-bold">
-                  <span className="text-zinc-600">Scan Frequency</span>
-                  <span>30 SEC</span>
+                  <span className="text-zinc-600">Post-Cooling</span>
+                  <span className="text-zinc-400">30.0 SEC</span>
                 </div>
               </div>
             </div>
@@ -370,7 +387,7 @@ const App: React.FC = () => {
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
                 {globalLog.length === 0 && <p className="text-center text-zinc-800 text-[9px] uppercase font-black py-10">Waiting for signals...</p>}
                 {globalLog.map((log, i) => (
-                  <div key={i} className={`p-5 rounded-[1.5rem] border border-zinc-900 bg-zinc-950/50 text-[10px] font-bold leading-relaxed ${log.includes('✅') ? 'text-cyan-400 border-cyan-900/10' : log.includes('❌') ? 'text-red-400 border-red-900/10' : 'text-zinc-500'}`}>
+                  <div key={i} className={`p-5 rounded-[1.5rem] border border-zinc-900 bg-zinc-950/50 text-[10px] font-bold leading-relaxed ${log.includes('✅') ? 'text-cyan-400 border-cyan-900/10' : log.includes('🛡️') ? 'text-yellow-500' : log.includes('❌') ? 'text-red-400 border-red-900/10' : 'text-zinc-500'}`}>
                     {log}
                   </div>
                 ))}
@@ -387,21 +404,18 @@ const App: React.FC = () => {
             
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-[9px] font-black uppercase text-zinc-600 tracking-widest ml-4">Channel Identity</label>
-                <input className="w-full bg-zinc-900 border-none rounded-2xl p-6 text-sm font-bold text-white outline-none" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} placeholder="Name" />
+                <label className="text-[9px] font-black uppercase text-zinc-600 tracking-widest ml-4">Channel Name</label>
+                <input className="w-full bg-zinc-900 border-none rounded-2xl p-6 text-sm font-bold text-white outline-none" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} />
               </div>
               <div className="space-y-2">
-                <label className="text-[9px] font-black uppercase text-zinc-600 tracking-widest ml-4">Content Niche</label>
-                <input className="w-full bg-zinc-900 border-none rounded-2xl p-6 text-sm font-bold text-white outline-none" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} placeholder="AI / Sci-Fi" />
+                <label className="text-[9px] font-black uppercase text-zinc-600 tracking-widest ml-4">Niche</label>
+                <input className="w-full bg-zinc-900 border-none rounded-2xl p-6 text-sm font-bold text-white outline-none" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} />
               </div>
             </div>
 
             <div className="p-8 bg-zinc-900/50 rounded-[2.5rem] space-y-8 border border-zinc-800/50">
               <div className="flex justify-between items-center">
-                <div className="space-y-1">
-                  <h3 className="text-sm font-black uppercase italic">Weekly Cycle Planner</h3>
-                  <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Select active days and up to 3 slots</p>
-                </div>
+                <h3 className="text-sm font-black uppercase italic">Deployment Schedule</h3>
                 <button onClick={() => setNewChan({...newChan, autoDeploy: !newChan.autoDeploy})} className={`w-14 h-7 rounded-full relative transition-all ${newChan.autoDeploy ? 'bg-cyan-500 shadow-[0_0_15px_#06b6d4]' : 'bg-zinc-800'}`}>
                   <div className={`absolute top-1 w-5 h-5 bg-white rounded-full transition-all ${newChan.autoDeploy ? 'right-1' : 'left-1'}`}></div>
                 </button>
@@ -420,8 +434,8 @@ const App: React.FC = () => {
                   <div className="grid grid-cols-3 gap-4">
                     {[0, 1, 2].map(idx => (
                       <div key={idx} className="space-y-2">
-                        <label className="text-[8px] font-black text-zinc-600 uppercase tracking-widest ml-1">Slot {idx+1}</label>
-                        <input type="time" className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-xs font-black text-white focus:border-cyan-500 outline-none transition-all" value={newChan.weeklySchedule.times[idx]} onChange={e => {
+                        <label className="text-[8px] font-black text-zinc-600 uppercase tracking-widest">Slot {idx+1}</label>
+                        <input type="time" className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-xs font-black text-white focus:border-cyan-500 outline-none" value={newChan.weeklySchedule.times[idx]} onChange={e => {
                           const times = [...newChan.weeklySchedule.times];
                           times[idx] = e.target.value;
                           setNewChan({...newChan, weeklySchedule: { ...newChan.weeklySchedule, times }});
@@ -434,8 +448,8 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex gap-6 pt-4 border-t border-zinc-900">
-              <button onClick={() => setIsModalOpen(false)} className="flex-1 py-6 text-zinc-600 font-black uppercase text-[11px] tracking-widest hover:text-white transition-all">Discard</button>
-              <button onClick={saveChannel} className="flex-1 py-6 bg-white text-black rounded-[2rem] font-black uppercase text-[11px] tracking-widest shadow-2xl hover:bg-cyan-400 hover:text-black transition-all">Sync Protocol</button>
+              <button onClick={() => setIsModalOpen(false)} className="flex-1 py-6 text-zinc-600 font-black uppercase text-[11px] tracking-widest">Discard</button>
+              <button onClick={saveChannel} className="flex-1 py-6 bg-white text-black rounded-[2rem] font-black uppercase text-[11px] tracking-widest shadow-2xl hover:bg-cyan-400 transition-all">Save Config</button>
             </div>
           </div>
         </div>
