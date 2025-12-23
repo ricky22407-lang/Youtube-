@@ -10,10 +10,15 @@ export interface ChannelConfig {
   language?: 'zh-TW' | 'en';
   searchKeywords?: string[];
   regionCode?: string;
-  // 自動排程擴充
-  nextRun?: string; // ISO String
+  
+  // 升級版排程系統
   autoDeploy: boolean;
+  weeklySchedule?: {
+    days: number[]; // 0-6 (Sun-Sat)
+    times: string[]; // ["HH:mm", "HH:mm", "HH:mm"]
+  };
   lastRun?: string;
+  lastTriggeredSlot?: string; // 格式: "day_time" 防止重複觸發
 }
 
 export interface PipelineMetadata {
@@ -38,7 +43,6 @@ export interface ChannelState {
   target_audience: string;
 }
 
-// Added missing TrendSignals interface for Phase 1
 export interface TrendSignals {
   action_verb_frequency: Record<string, number>;
   subject_type_frequency: Record<string, number>;
@@ -47,14 +51,12 @@ export interface TrendSignals {
   algorithm_signal_frequency: Record<string, number>;
 }
 
-// Added missing IModule interface for pipeline architecture
 export interface IModule<TInput, TOutput> {
   name: string;
   description: string;
   execute(input: TInput): Promise<TOutput>;
 }
 
-// Added missing CandidateTheme interface for Phase 2 & 3
 export interface CandidateTheme {
   id: string;
   subject_type: string;
@@ -72,7 +74,6 @@ export interface CandidateTheme {
   };
 }
 
-// Added missing PromptOutput interface for Phase 4
 export interface PromptOutput {
   candidate_id: string;
   prompt: string;
@@ -81,14 +82,12 @@ export interface PromptOutput {
   candidate_reference: CandidateTheme;
 }
 
-// Added missing TestResult interface for unit testing
 export interface TestResult {
   moduleName: string;
   passed: boolean;
   logs: string[];
 }
 
-// Added missing VideoAsset interface for Phase 5
 export interface VideoAsset {
   candidate_id: string;
   video_url: string;
@@ -97,7 +96,6 @@ export interface VideoAsset {
   generated_at: string;
 }
 
-// Added missing UploaderInput interface for Phase 6
 export interface UploaderInput {
   video_asset: VideoAsset;
   metadata: PromptOutput;
@@ -109,7 +107,6 @@ export interface UploaderInput {
   authCredentials?: any;
 }
 
-// Added missing UploadResult interface for Phase 6
 export interface UploadResult {
   platform: string;
   video_id: string;
