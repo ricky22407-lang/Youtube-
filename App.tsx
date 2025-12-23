@@ -180,47 +180,83 @@ const App: React.FC = () => {
 
       {/* Modals */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
-          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-lg rounded-[2rem] p-10 space-y-8">
-            <h3 className="text-2xl font-black italic uppercase">{editingId ? '編輯頻道' : '新增頻道'}</h3>
-            <div className="space-y-4">
-              <input 
-                type="text" placeholder="頻道名稱" 
-                className="w-full bg-black border border-zinc-800 p-4 rounded-xl outline-none focus:border-white transition-all"
-                value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})}
-              />
-              <input 
-                type="text" placeholder="利基市場 (Niche)" 
-                className="w-full bg-black border border-zinc-800 p-4 rounded-xl outline-none focus:border-white transition-all"
-                value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})}
-              />
-              <select 
-                className="w-full bg-black border border-zinc-800 p-4 rounded-xl outline-none"
-                value={newChan.language} onChange={e => setNewChan({...newChan, language: e.target.value as any})}
-              >
-                <option value="zh-TW">繁體中文</option>
-                <option value="en">English</option>
-              </select>
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
+          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-xl rounded-[3rem] p-12 space-y-8 shadow-2xl">
+            <h3 className="text-3xl font-black italic uppercase tracking-tighter text-white">{editingId ? '編輯頻道設定' : '建立核心頻道'}</h3>
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">基本資訊</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <input 
+                    type="text" placeholder="頻道名稱" 
+                    className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-bold"
+                    value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})}
+                  />
+                  <input 
+                    type="text" placeholder="利基市場" 
+                    className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-bold"
+                    value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">排程設定</label>
+                <div className="flex gap-4 items-center">
+                  <input 
+                    type="time" 
+                    className="flex-1 bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-mono font-bold"
+                    value={newChan.schedule.time} onChange={e => setNewChan({...newChan, schedule: { ...newChan.schedule, time: e.target.value }})}
+                  />
+                  <select 
+                    className="flex-1 bg-black border border-zinc-800 p-5 rounded-2xl outline-none text-white font-bold"
+                    value={newChan.language} onChange={e => setNewChan({...newChan, language: e.target.value as any})}
+                  >
+                    <option value="zh-TW">繁體中文</option>
+                    <option value="en">English</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">重複星期</label>
+                <div className="flex gap-2">
+                  {['日','一','二','三','四','五','六'].map((d, i) => (
+                    <button 
+                      key={i} 
+                      onClick={() => toggleDay(i)}
+                      className={`flex-1 py-4 rounded-xl font-black text-xs transition-all border ${newChan.schedule.activeDays.includes(i) ? 'bg-white text-black border-white' : 'bg-transparent text-zinc-600 border-zinc-800'}`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-            <div className="flex gap-4">
-              <button onClick={() => setIsModalOpen(false)} className="flex-1 p-4 bg-zinc-800 rounded-xl font-bold">取消</button>
-              <button onClick={saveChannel} className="flex-1 p-4 bg-white text-black rounded-xl font-bold">儲存</button>
+
+            <div className="flex gap-6 pt-6">
+              <button onClick={() => setIsModalOpen(false)} className="flex-1 p-6 text-zinc-500 font-black uppercase tracking-widest text-[10px]">取消</button>
+              <button onClick={saveChannel} className="flex-1 p-6 bg-white text-black rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all">儲存並同步</button>
             </div>
           </div>
         </div>
       )}
 
       {showGAS && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
-          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-2xl rounded-[2rem] p-10 space-y-6">
-            <h3 className="text-2xl font-black italic uppercase">GAS 部署腳本</h3>
-            <pre className="bg-black p-6 rounded-xl text-xs font-mono text-cyan-400 overflow-x-auto">
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[110] flex items-center justify-center p-6">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-3xl rounded-[3rem] p-12 space-y-8 shadow-2xl">
+            <h3 className="text-2xl font-black italic uppercase text-white">Google Apps Script 部署指令</h3>
+            <p className="text-zinc-400 text-sm font-bold leading-relaxed">
+              請將以下代碼複製到 Google Sheet 的「延伸模組 &gt; Apps Script」中，並設定每小時執行一次的觸發器，即可達成全自動發片。
+            </p>
+            <pre className="bg-black p-8 rounded-3xl text-xs font-mono text-cyan-400 overflow-x-auto border border-zinc-800 select-all">
               {generateGASScript()}
             </pre>
-            <button onClick={() => setShowGAS(false)} className="w-full p-4 bg-white text-black rounded-xl font-bold">關閉</button>
+            <button onClick={() => setShowGAS(false)} className="w-full p-6 bg-white text-black rounded-2xl font-black uppercase tracking-widest text-xs">我知道了</button>
           </div>
         </div>
       )}
+      <style>{`.onyx-card { background: linear-gradient(145deg, #101010, #080808); }`}</style>
     </div>
   );
 };
