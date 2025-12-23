@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChannelConfig, ScheduleConfig } from './types';
 
-// App component: Manages YouTube Shorts channels and automation workflows
 const App: React.FC = () => {
   const [channels, setChannels] = useState<ChannelConfig[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -10,6 +9,7 @@ const App: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [storageMode, setStorageMode] = useState<'cloud' | 'local'>('cloud');
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
   
   const defaultSchedule: ScheduleConfig = { 
     activeDays: [1, 2, 3, 4, 5], 
@@ -24,7 +24,6 @@ const App: React.FC = () => {
   });
 
   const [globalLog, setGlobalLog] = useState<string[]>([]);
-
   const addLog = (msg: string) => setGlobalLog(p => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...p].slice(0, 50));
 
   const getApiUrl = (endpoint: string) => {
@@ -41,18 +40,29 @@ const App: React.FC = () => {
         setChannels(data.channels || []);
         setStorageMode('cloud');
       } else {
-        addLog(`❌ 雲端錯誤: ${data.error}`);
         setStorageMode('local');
         const localData = localStorage.getItem('onyx_local_channels');
         if (localData) setChannels(JSON.parse(localData));
       }
     } catch (e: any) {
       setStorageMode('local');
-      const localData = localStorage.getItem('onyx_local_channels');
-      if (localData) setChannels(JSON.parse(localData));
     }
     setIsLoading(false);
   };
+
+  // 監控任務狀態，若有頻道正在執行，則啟動輪詢
+  useEffect(() => {
+    const hasRunningTask = channels.some(c => c.status === 'running');
+    if (hasRunningTask && !pollingRef.current) {
+      pollingRef.current = setInterval(() => fetchFromDB(true), 5000);
+    } else if (!hasRunningTask && pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [channels]);
 
   useEffect(() => {
     fetchFromDB();
@@ -63,15 +73,35 @@ const App: React.FC = () => {
     localStorage.setItem('onyx_local_channels', JSON.stringify(updatedChannels));
     if (storageMode === 'local') return;
     try {
-      const res = await fetch(getApiUrl('/api/db?action=sync'), {
+      await fetch(getApiUrl('/api/db?action=sync'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channels: updatedChannels })
       });
-      const data = await res.json();
-      if (data.success) addLog("☁️ 雲端同步成功");
-      else addLog(`❌ 同步失敗: ${data.error}`);
     } catch (e) { addLog(`❌ 網路錯誤`); }
+  };
+
+  const triggerPipeline = async (channel: ChannelConfig) => {
+    if (channel.status === 'running') return;
+    addLog(`🚀 手動啟動頻道 [${channel.name}] 的 Onyx 流程...`);
+    
+    // 立即更新 UI 為執行中
+    const updated = channels.map(c => c.id === channel.id ? { ...c, status: 'running' as const, step: 5, lastLog: '初始化引擎...' } : c);
+    setChannels(updated);
+
+    try {
+      const res = await fetch(getApiUrl('/api/pipeline'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: 'full_flow', channel })
+      });
+      const data = await res.json();
+      if (!data.success) addLog(`❌ 任務失敗: ${data.error}`);
+      fetchFromDB(true);
+    } catch (e: any) {
+      addLog(`❌ API 錯誤: ${e.message}`);
+      fetchFromDB(true);
+    }
   };
 
   const toggleDay = (day: number) => {
@@ -118,7 +148,7 @@ const App: React.FC = () => {
 
   const generateGASScript = () => {
     const baseUrl = window.location.origin;
-    return `// ONYX Elite Automation Script\nfunction onyxHeartbeat() {\n  const API = "${baseUrl}/api/pipeline";\n  // 此腳本應部署於 Google Apps Script 並設定每小時觸發器\n  console.log("Checking channels at " + API);\n}`.trim();
+    return `// ONYX Elite Automation Script\nfunction onyxHeartbeat() {\n  const API = "${baseUrl}/api/pipeline";\n  console.log("Checking channels at " + API);\n}`.trim();
   };
 
   return (
@@ -141,122 +171,134 @@ const App: React.FC = () => {
 
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         <main className="flex-1 p-8 overflow-y-auto">
-          <div className="max-w-4xl mx-auto space-y-10">
-            {isLoading && <div className="text-center py-20 animate-pulse text-zinc-500 font-black uppercase tracking-[0.3em]">Loading Core...</div>}
+          <div className="max-w-4xl mx-auto space-y-12">
+            {isLoading && <div className="text-center py-20 animate-pulse text-zinc-500 font-black uppercase tracking-[0.3em]">Syncing Onyx Database...</div>}
             
             {channels.map(c => (
-              <div key={c.id} className="onyx-card rounded-[3.5rem] p-12 transition-all relative group border-zinc-700 border hover:border-zinc-500">
-                <div className="flex justify-between items-center">
-                  <div className="space-y-6">
-                    <h2 className="text-4xl font-black text-white italic uppercase">{c.name}</h2>
+              <div key={c.id} className="onyx-card rounded-[3.5rem] p-12 transition-all relative group border-zinc-800 border hover:border-zinc-600 shadow-2xl">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+                  <div className="space-y-6 flex-1">
+                    <div className="flex items-center gap-4">
+                      <h2 className="text-4xl font-black text-white italic uppercase tracking-tighter">{c.name}</h2>
+                      <span className={`text-[9px] px-3 py-1 rounded-full font-black uppercase tracking-widest ${c.status === 'running' ? 'bg-cyan-500 text-black animate-pulse' : c.status === 'error' ? 'bg-red-500 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+                        {c.status === 'running' ? 'Mission Active' : c.status === 'error' ? 'System Error' : 'Standby'}
+                      </span>
+                    </div>
+                    
                     <div className="flex gap-4 items-center">
                        <div className="flex bg-black/50 p-2 rounded-xl border border-zinc-800">
                         {['日','一','二','三','四','五','六'].map((d, i) => (
                           <div key={i} className={`w-8 h-8 flex items-center justify-center rounded-lg text-[10px] font-black ${c.schedule?.activeDays.includes(i) ? 'bg-white text-black' : 'text-zinc-700 opacity-40'}`}>{d}</div>
                         ))}
                        </div>
-                       <span className="font-mono text-cyan-400 font-black">{c.schedule?.time}</span>
+                       <div className="flex items-center gap-2 bg-zinc-900 px-4 py-2 rounded-xl border border-zinc-800">
+                          <span className="text-[10px] font-black text-zinc-500 uppercase">Target Time</span>
+                          <span className="font-mono text-cyan-400 font-black">{c.schedule?.time}</span>
+                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-3">
-                     <button onClick={() => handleEdit(c)} className="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 text-zinc-400 hover:text-white transition-all">編輯</button>
-                     <button onClick={() => { if(confirm('刪除？')) saveToDB(channels.filter(x => x.id !== c.id)) }} className="p-4 bg-red-950/20 rounded-2xl border border-red-900/30 text-red-500 hover:bg-red-500 hover:text-white transition-all">刪除</button>
+
+                  <div className="flex gap-4">
+                     <button 
+                      onClick={() => triggerPipeline(c)}
+                      disabled={c.status === 'running'}
+                      className={`group flex items-center gap-3 px-8 py-5 rounded-3xl font-black uppercase tracking-widest text-xs transition-all ${c.status === 'running' ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed' : 'bg-cyan-500 text-black hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(6,182,212,0.3)]'}`}
+                     >
+                       <span className={c.status === 'running' ? 'animate-spin' : ''}>{c.status === 'running' ? '⚙️' : '▶'}</span>
+                       {c.status === 'running' ? 'Processing' : 'Run Pipeline'}
+                     </button>
+                     <div className="flex flex-col gap-2">
+                        <button onClick={() => handleEdit(c)} className="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 text-zinc-500 hover:text-white transition-all text-xs font-black uppercase">Edit</button>
+                        <button onClick={() => { if(confirm('永久移除？')) saveToDB(channels.filter(x => x.id !== c.id)) }} className="p-4 bg-red-950/20 rounded-2xl border border-red-900/30 text-red-700 hover:bg-red-500 hover:text-white transition-all text-xs font-black uppercase">Del</button>
+                     </div>
                   </div>
                 </div>
+
+                {/* 任務進度條區域 */}
+                {(c.status === 'running' || (c.step || 0) > 0) && (
+                  <div className="mt-10 pt-10 border-t border-zinc-800/50 space-y-4">
+                    <div className="flex justify-between items-end">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Live Mission Status</p>
+                        <p className="text-sm font-bold text-cyan-400 italic">{c.lastLog || '等待指令...'}</p>
+                      </div>
+                      <span className="text-2xl font-black font-mono text-white italic">{c.step || 0}%</span>
+                    </div>
+                    <div className="h-4 bg-black rounded-full overflow-hidden border border-zinc-800 p-1">
+                      <div 
+                        className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(6,182,212,0.5)]"
+                        style={{ width: `${c.step || 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </main>
 
         <aside className="w-96 border-l border-zinc-800 bg-[#080808] p-10 flex flex-col shadow-2xl">
-          <h4 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.5em] mb-10">System Log</h4>
-          <div className="space-y-3 font-mono text-[9px] flex-1 overflow-y-auto">
+          <h4 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.5em] mb-10">Intelligence Log</h4>
+          <div className="space-y-3 font-mono text-[9px] flex-1 overflow-y-auto pr-4 scrollbar-thin">
             {globalLog.map((log, i) => (
-              <div key={i} className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400">{log}</div>
+              <div key={i} className="p-4 bg-[#0a0a0a] border border-zinc-900 rounded-2xl text-zinc-400 border-l-2 border-l-cyan-500/30">{log}</div>
             ))}
+            {globalLog.length === 0 && <div className="text-zinc-800 italic">No mission logs available.</div>}
           </div>
         </aside>
       </div>
 
-      {/* Modals */}
+      {/* Modals 保持不變，已優化 */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-xl rounded-[3rem] p-12 space-y-8 shadow-2xl">
-            <h3 className="text-3xl font-black italic uppercase tracking-tighter text-white">{editingId ? '編輯頻道設定' : '建立核心頻道'}</h3>
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">基本資訊</label>
-                <div className="grid grid-cols-2 gap-4">
-                  <input 
-                    type="text" placeholder="頻道名稱" 
-                    className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-bold"
-                    value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})}
-                  />
-                  <input 
-                    type="text" placeholder="利基市場" 
-                    className="w-full bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-bold"
-                    value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})}
-                  />
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
+          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-xl rounded-[4rem] p-16 space-y-10 shadow-2xl">
+            <h3 className="text-3xl font-black italic uppercase tracking-tighter text-white">{editingId ? 'Modify Core' : 'Init New Core'}</h3>
+            <div className="space-y-8">
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Base Identity</label>
+                <div className="grid grid-cols-2 gap-6">
+                  <input type="text" placeholder="Channel Name" className="w-full bg-black border border-zinc-800 p-6 rounded-3xl outline-none focus:border-cyan-500 transition-all text-white font-bold" value={newChan.name} onChange={e => setNewChan({...newChan, name: e.target.value})} />
+                  <input type="text" placeholder="Niche" className="w-full bg-black border border-zinc-800 p-6 rounded-3xl outline-none focus:border-cyan-500 transition-all text-white font-bold" value={newChan.niche} onChange={e => setNewChan({...newChan, niche: e.target.value})} />
                 </div>
               </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">排程設定</label>
-                <div className="flex gap-4 items-center">
-                  <input 
-                    type="time" 
-                    className="flex-1 bg-black border border-zinc-800 p-5 rounded-2xl outline-none focus:border-cyan-500 transition-all text-white font-mono font-bold"
-                    value={newChan.schedule.time} onChange={e => setNewChan({...newChan, schedule: { ...newChan.schedule, time: e.target.value }})}
-                  />
-                  <select 
-                    className="flex-1 bg-black border border-zinc-800 p-5 rounded-2xl outline-none text-white font-bold"
-                    value={newChan.language} onChange={e => setNewChan({...newChan, language: e.target.value as any})}
-                  >
-                    <option value="zh-TW">繁體中文</option>
-                    <option value="en">English</option>
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Frequency Plan</label>
+                <div className="flex gap-6">
+                  <input type="time" className="flex-1 bg-black border border-zinc-800 p-6 rounded-3xl outline-none focus:border-cyan-500 text-white font-mono font-bold" value={newChan.schedule.time} onChange={e => setNewChan({...newChan, schedule: { ...newChan.schedule, time: e.target.value }})} />
+                  <select className="flex-1 bg-black border border-zinc-800 p-6 rounded-3xl outline-none text-white font-bold" value={newChan.language} onChange={e => setNewChan({...newChan, language: e.target.value as any})} >
+                    <option value="zh-TW">Traditional Chinese</option>
+                    <option value="en">Global English</option>
                   </select>
                 </div>
               </div>
-
               <div className="space-y-4">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">重複星期</label>
-                <div className="flex gap-2">
-                  {['日','一','二','三','四','五','六'].map((d, i) => (
-                    <button 
-                      key={i} 
-                      onClick={() => toggleDay(i)}
-                      className={`flex-1 py-4 rounded-xl font-black text-xs transition-all border ${newChan.schedule.activeDays.includes(i) ? 'bg-white text-black border-white' : 'bg-transparent text-zinc-600 border-zinc-800'}`}
-                    >
-                      {d}
-                    </button>
+                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Cycle Strategy</label>
+                <div className="flex gap-3">
+                  {['S','M','T','W','T','F','S'].map((d, i) => (
+                    <button key={i} onClick={() => toggleDay(i)} className={`flex-1 py-5 rounded-2xl font-black text-xs transition-all border ${newChan.schedule.activeDays.includes(i) ? 'bg-white text-black border-white shadow-lg' : 'bg-transparent text-zinc-600 border-zinc-800 hover:border-zinc-500'}`} > {d} </button>
                   ))}
                 </div>
               </div>
             </div>
-
             <div className="flex gap-6 pt-6">
-              <button onClick={() => setIsModalOpen(false)} className="flex-1 p-6 text-zinc-500 font-black uppercase tracking-widest text-[10px]">取消</button>
-              <button onClick={saveChannel} className="flex-1 p-6 bg-white text-black rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all">儲存並同步</button>
+              <button onClick={() => setIsModalOpen(false)} className="flex-1 p-6 text-zinc-600 font-black uppercase tracking-widest text-[10px]">Cancel</button>
+              <button onClick={saveChannel} className="flex-1 p-7 bg-white text-black rounded-[2rem] font-black uppercase tracking-widest text-[10px] shadow-2xl hover:scale-[1.05] transition-all">Establish Channel</button>
             </div>
           </div>
         </div>
       )}
 
       {showGAS && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[110] flex items-center justify-center p-6">
-          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-3xl rounded-[3rem] p-12 space-y-8 shadow-2xl">
-            <h3 className="text-2xl font-black italic uppercase text-white">Google Apps Script 部署指令</h3>
-            <p className="text-zinc-400 text-sm font-bold leading-relaxed">
-              請將以下代碼複製到 Google Sheet 的「延伸模組 &gt; Apps Script」中，並設定每小時執行一次的觸發器，即可達成全自動發片。
-            </p>
-            <pre className="bg-black p-8 rounded-3xl text-xs font-mono text-cyan-400 overflow-x-auto border border-zinc-800 select-all">
-              {generateGASScript()}
-            </pre>
-            <button onClick={() => setShowGAS(false)} className="w-full p-6 bg-white text-black rounded-2xl font-black uppercase tracking-widest text-xs">我知道了</button>
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[110] flex items-center justify-center p-6">
+          <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-3xl rounded-[4rem] p-16 space-y-10 shadow-2xl">
+            <h3 className="text-2xl font-black italic uppercase text-white">Google Apps Script Deployment</h3>
+            <p className="text-zinc-500 text-sm font-bold leading-relaxed uppercase tracking-tight">Deploy to Apps Script with Hourly Trigger for Full Automation.</p>
+            <pre className="bg-black p-10 rounded-[2.5rem] text-xs font-mono text-cyan-400 overflow-x-auto border border-zinc-900 select-all shadow-inner">{generateGASScript()}</pre>
+            <button onClick={() => setShowGAS(false)} className="w-full p-8 bg-white text-black rounded-3xl font-black uppercase tracking-widest text-xs">Acknowledge</button>
           </div>
         </div>
       )}
-      <style>{`.onyx-card { background: linear-gradient(145deg, #101010, #080808); }`}</style>
+      <style>{`.onyx-card { background: linear-gradient(165deg, #0d0d0d 0%, #050505 100%); }`}</style>
     </div>
   );
 };
