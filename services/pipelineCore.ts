@@ -4,46 +4,70 @@ import {
   ChannelConfig, UploadResult 
 } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
-import { Buffer } from 'buffer';
+import { Buffer } from 'buffer'; // Fix: Import Buffer to resolve 'Cannot find name Buffer' in browser/bundled environments
 
 const TEXT_MODEL = "gemini-3-flash-preview";
 const VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 
-export const PipelineCore = {
-  // Removed getApiKey helper to strictly comply with the rule: obtain process.env.API_KEY directly.
+/**
+ * 輕量化 REST 呼叫
+ */
+async function youtubeRest(path: string, method: 'GET' | 'POST', body: any, auth: any) {
+  const url = `https://www.googleapis.com/youtube/v3/${path}`;
+  const response = await fetch(url, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${auth.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: method === 'POST' ? JSON.stringify(body) : undefined
+  });
+  
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`YouTube API: ${response.status} - ${errText}`);
+  }
+  return response.json();
+}
 
-  async fetchTrends(config: any): Promise<ShortsData[]> {
-    // Fix: Exclusively use process.env.API_KEY
-    const apiKey = process.env.API_KEY;
-    const query = encodeURIComponent(`#shorts ${config.niche || 'AI'}`);
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&type=video&maxResults=5&order=viewCount&key=${apiKey}`;
-    
+export const PipelineCore = {
+  async fetchTrends(config: ChannelConfig): Promise<ShortsData[]> {
+    if (!config.auth?.access_token) return this.getMockTrends();
     try {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
-      
-      return (data.items || []).map((v: any) => ({
-        id: v.id?.videoId || 'unknown',
+      const query = encodeURIComponent(`#shorts ${config.searchKeywords?.[0] || 'AI'}`);
+      const searchData = await youtubeRest(
+        `search?part=snippet&q=${query}&type=video&regionCode=${config.regionCode || 'TW'}&maxResults=8&order=viewCount`, 
+        'GET', null, config.auth
+      );
+      const videoIds = (searchData.items || []).map((i: any) => i.id?.videoId).filter(Boolean);
+      if (videoIds.length === 0) return this.getMockTrends();
+
+      const videosData = await youtubeRest(
+        `videos?part=snippet,statistics&id=${videoIds.join(',')}`, 
+        'GET', null, config.auth
+      );
+
+      return (videosData.items || []).map((v: any) => ({
+        id: v.id || 'unknown',
         title: v.snippet?.title || 'No Title',
-        hashtags: [],
-        view_count: 0,
+        hashtags: v.snippet?.tags || [],
+        view_count: parseInt(v.statistics?.viewCount || '0', 10),
+        region: config.regionCode,
         view_growth_rate: 1.5,
       }));
-    } catch (e) {
-      console.warn("Trend fetch failed, using mock data", e);
-      return [{ id: "m1", title: `${config.niche} 熱門趨勢`, hashtags: [], view_count: 1000, view_growth_rate: 1.1 }];
+    } catch (e: any) {
+      console.error("Fetch Error:", e.message);
+      return this.getMockTrends();
     }
   },
 
-  async planContent(trends: ShortsData[], channelState: any): Promise<PromptOutput> {
-    // Fix: Instantiate GoogleGenAI directly with process.env.API_KEY in a named parameter
+  async planContent(trends: ShortsData[], channelState: ChannelState): Promise<PromptOutput> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: TEXT_MODEL,
-      contents: `分析趨勢：${trends.map(t => t.title).join(', ')}。為「${channelState.niche}」頻道規劃一個 9:16 的爆款影片。`,
+      contents: `分析趨勢: ${JSON.stringify(trends)}。頻道主軸: ${channelState.niche}`,
       config: {
-        systemInstruction: "你是一位 YouTube Shorts 專家。請直接產出 JSON，包含 prompt (視覺描述), title (標題), desc (描述與標籤)。",
+        systemInstruction: "你是一位頂尖短影音企劃。請產出 JSON：{ \"prompt\": \"視覺描述\", \"title\": \"標題\", \"desc\": \"描述\" }。",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -57,19 +81,17 @@ export const PipelineCore = {
       }
     });
 
-    // Fix: Access .text property directly (it's a getter, not a method)
     const assets = JSON.parse(response.text || '{}');
     return {
       candidate_id: "ai_" + Date.now(),
       prompt: assets.prompt,
       title_template: assets.title,
       description_template: assets.desc,
-      candidate_reference: {} as any
+      candidate_reference: { subject_type: "AUTO" } as any
     };
   },
 
   async renderVideo(metadata: PromptOutput): Promise<VideoAsset> {
-    // Fix: Instantiate GoogleGenAI directly with process.env.API_KEY in a named parameter
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     let operation = await ai.models.generateVideos({
       model: VIDEO_MODEL,
@@ -77,32 +99,17 @@ export const PipelineCore = {
       config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '9:16' }
     });
 
-    let attempts = 0;
-    while (!operation.done && attempts < 40) {
-      // Fix: Follow 10-second polling recommendation for video generation
+    while (!operation.done) {
       await new Promise(r => setTimeout(r, 10000));
       operation = await ai.operations.getVideosOperation({ operation });
-      attempts++;
     }
-
-    if (!operation.done) throw new Error("影片生成超時 (Veo Timeout)");
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    // Fix: Append process.env.API_KEY to the download link
-    const res = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-    const buffer = await res.arrayBuffer();
+    const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+    const buffer = await response.arrayBuffer();
     
-    let base64 = "";
-    if (typeof window === 'undefined') {
-       base64 = Buffer.from(buffer).toString('base64');
-    } else {
-       const bytes = new Uint8Array(buffer);
-       let binary = '';
-       for (let i = 0; i < bytes.byteLength; i++) {
-         binary += String.fromCharCode(bytes[i]);
-       }
-       base64 = window.btoa(binary);
-    }
+    // 使用 Node.js 全域 Buffer，避免模組引用失敗
+    const base64 = Buffer.from(buffer).toString('base64');
 
     return {
       candidate_id: metadata.candidate_id,
@@ -114,13 +121,18 @@ export const PipelineCore = {
   },
 
   async uploadVideo(input: any): Promise<UploadResult> {
+    // 此處目前維持模擬上傳，以確保穩定性
     await new Promise(r => setTimeout(r, 2000));
     return {
       platform: 'youtube',
-      video_id: 'vid_' + Math.random().toString(36).substring(7),
-      platform_url: 'https://youtube.com/shorts/automated_success',
+      video_id: 'mock_' + Date.now(),
+      platform_url: `https://youtube.com/shorts/sync_done`,
       status: 'uploaded',
       uploaded_at: new Date().toISOString()
     };
+  },
+
+  getMockTrends(): ShortsData[] {
+    return [{ id: "m1", title: "AI Life Hacks", hashtags: ["#ai"], view_count: 100, region: "TW", view_growth_rate: 1.1 }];
   }
 };
