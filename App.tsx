@@ -50,12 +50,11 @@ const App: React.FC = () => {
     setIsLoading(false);
   };
 
-  // 監控任務狀態，若有頻道正在執行，則啟動輪詢
   useEffect(() => {
-    const hasRunningTask = channels.some(c => c.status === 'running');
-    if (hasRunningTask && !pollingRef.current) {
-      pollingRef.current = setInterval(() => fetchFromDB(true), 5000);
-    } else if (!hasRunningTask && pollingRef.current) {
+    const hasActiveTask = channels.some(c => c.status === 'running');
+    if (hasActiveTask && !pollingRef.current) {
+      pollingRef.current = setInterval(() => fetchFromDB(true), 3000);
+    } else if (!hasActiveTask && pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
@@ -83,11 +82,13 @@ const App: React.FC = () => {
 
   const triggerPipeline = async (channel: ChannelConfig) => {
     if (channel.status === 'running') return;
-    addLog(`🚀 手動啟動頻道 [${channel.name}] 的 Onyx 流程...`);
+    addLog(`🚀 正在向雲端引擎發送任務: ${channel.name}...`);
     
-    // 立即更新 UI 為執行中
-    const updated = channels.map(c => c.id === channel.id ? { ...c, status: 'running' as const, step: 5, lastLog: '初始化引擎...' } : c);
-    setChannels(updated);
+    // 預先更新前端 UI 狀態
+    const optimisticUpdate = channels.map(c => 
+      c.id === channel.id ? { ...c, status: 'running' as const, step: 5, lastLog: '正在聯繫雲端核心...' } : c
+    );
+    setChannels(optimisticUpdate);
 
     try {
       const res = await fetch(getApiUrl('/api/pipeline'), {
@@ -96,10 +97,13 @@ const App: React.FC = () => {
         body: JSON.stringify({ stage: 'full_flow', channel })
       });
       const data = await res.json();
-      if (!data.success) addLog(`❌ 任務失敗: ${data.error}`);
-      fetchFromDB(true);
+      if (!data.success) {
+        addLog(`❌ 雲端拒絕任務: ${data.error}`);
+        // 錯誤時強制重整以獲取錯誤日誌
+        fetchFromDB(true);
+      }
     } catch (e: any) {
-      addLog(`❌ API 錯誤: ${e.message}`);
+      addLog(`❌ 連線中斷: ${e.message}`);
       fetchFromDB(true);
     }
   };
@@ -155,7 +159,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#050505] flex flex-col text-zinc-100">
       <nav className="p-6 border-b border-zinc-800 bg-[#080808]/90 backdrop-blur-xl sticky top-0 z-50 flex justify-between items-center shadow-2xl">
         <div className="flex items-center gap-6">
-          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center font-black text-black text-xl italic">S</div>
+          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center font-black text-black text-xl italic shadow-[0_0_20px_rgba(255,255,255,0.2)]">S</div>
           <div>
             <h1 className="text-2xl font-black text-white italic tracking-tighter uppercase">ShortsPilot <span className="text-cyan-400">ONYX</span></h1>
             <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${storageMode === 'cloud' ? 'text-cyan-400 border-cyan-800 bg-cyan-950' : 'text-amber-400 border-amber-800 bg-amber-950'} border mt-2 block w-fit`}>
@@ -165,17 +169,17 @@ const App: React.FC = () => {
         </div>
         <div className="flex gap-4">
            <button onClick={() => setShowGAS(true)} className="px-5 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 rounded-lg font-bold border border-zinc-700">GAS 部署</button>
-           <button onClick={() => { setIsModalOpen(true); setEditingId(null); setNewChan({ name: '', niche: 'AI 科技', language: 'zh-TW', schedule: { ...defaultSchedule } }); }} className="px-8 py-2.5 bg-white text-black rounded-lg font-black shadow-lg">新增頻道</button>
+           <button onClick={() => { setIsModalOpen(true); setEditingId(null); setNewChan({ name: '', niche: 'AI 科技', language: 'zh-TW', schedule: { ...defaultSchedule } }); }} className="px-8 py-2.5 bg-white text-black rounded-lg font-black shadow-lg hover:scale-105 transition-all">新增頻道</button>
         </div>
       </nav>
 
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         <main className="flex-1 p-8 overflow-y-auto">
           <div className="max-w-4xl mx-auto space-y-12">
-            {isLoading && <div className="text-center py-20 animate-pulse text-zinc-500 font-black uppercase tracking-[0.3em]">Syncing Onyx Database...</div>}
+            {isLoading && <div className="text-center py-20 animate-pulse text-zinc-500 font-black uppercase tracking-[0.3em]">Connecting to Onyx Grid...</div>}
             
             {channels.map(c => (
-              <div key={c.id} className="onyx-card rounded-[3.5rem] p-12 transition-all relative group border-zinc-800 border hover:border-zinc-600 shadow-2xl">
+              <div key={c.id} className="onyx-card rounded-[3.5rem] p-12 transition-all relative group border-zinc-800 border hover:border-cyan-900/50 shadow-2xl">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
                   <div className="space-y-6 flex-1">
                     <div className="flex items-center gap-4">
@@ -186,9 +190,9 @@ const App: React.FC = () => {
                     </div>
                     
                     <div className="flex gap-4 items-center">
-                       <div className="flex bg-black/50 p-2 rounded-xl border border-zinc-800">
+                       <div className="flex bg-black/50 p-2 rounded-xl border border-zinc-800 shadow-inner">
                         {['日','一','二','三','四','五','六'].map((d, i) => (
-                          <div key={i} className={`w-8 h-8 flex items-center justify-center rounded-lg text-[10px] font-black ${c.schedule?.activeDays.includes(i) ? 'bg-white text-black' : 'text-zinc-700 opacity-40'}`}>{d}</div>
+                          <div key={i} className={`w-8 h-8 flex items-center justify-center rounded-lg text-[10px] font-black transition-all ${c.schedule?.activeDays.includes(i) ? 'bg-white text-black scale-110 shadow-lg' : 'text-zinc-700 opacity-40'}`}>{d}</div>
                         ))}
                        </div>
                        <div className="flex items-center gap-2 bg-zinc-900 px-4 py-2 rounded-xl border border-zinc-800">
@@ -202,33 +206,37 @@ const App: React.FC = () => {
                      <button 
                       onClick={() => triggerPipeline(c)}
                       disabled={c.status === 'running'}
-                      className={`group flex items-center gap-3 px-8 py-5 rounded-3xl font-black uppercase tracking-widest text-xs transition-all ${c.status === 'running' ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed' : 'bg-cyan-500 text-black hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(6,182,212,0.3)]'}`}
+                      className={`group flex items-center gap-3 px-10 py-6 rounded-3xl font-black uppercase tracking-widest text-xs transition-all ${c.status === 'running' ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800' : 'bg-cyan-500 text-black hover:scale-105 hover:bg-cyan-400 active:scale-95 shadow-[0_0_30px_rgba(6,182,212,0.3)]'}`}
                      >
                        <span className={c.status === 'running' ? 'animate-spin' : ''}>{c.status === 'running' ? '⚙️' : '▶'}</span>
-                       {c.status === 'running' ? 'Processing' : 'Run Pipeline'}
+                       {c.status === 'running' ? 'Active' : 'Deploy'}
                      </button>
                      <div className="flex flex-col gap-2">
-                        <button onClick={() => handleEdit(c)} className="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 text-zinc-500 hover:text-white transition-all text-xs font-black uppercase">Edit</button>
-                        <button onClick={() => { if(confirm('永久移除？')) saveToDB(channels.filter(x => x.id !== c.id)) }} className="p-4 bg-red-950/20 rounded-2xl border border-red-900/30 text-red-700 hover:bg-red-500 hover:text-white transition-all text-xs font-black uppercase">Del</button>
+                        <button onClick={() => handleEdit(c)} className="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 text-zinc-500 hover:text-white transition-all text-[10px] font-black uppercase tracking-widest">Edit</button>
+                        <button onClick={() => { if(confirm('永久移除？')) saveToDB(channels.filter(x => x.id !== c.id)) }} className="p-4 bg-red-950/20 rounded-2xl border border-red-900/30 text-red-700 hover:bg-red-500 hover:text-white transition-all text-[10px] font-black uppercase tracking-widest">Del</button>
                      </div>
                   </div>
                 </div>
 
-                {/* 任務進度條區域 */}
                 {(c.status === 'running' || (c.step || 0) > 0) && (
-                  <div className="mt-10 pt-10 border-t border-zinc-800/50 space-y-4">
+                  <div className="mt-10 pt-10 border-t border-zinc-800/50 space-y-6">
                     <div className="flex justify-between items-end">
-                      <div className="space-y-1">
-                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Live Mission Status</p>
-                        <p className="text-sm font-bold text-cyan-400 italic">{c.lastLog || '等待指令...'}</p>
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                          <span className="w-2 h-2 bg-cyan-500 rounded-full animate-ping"></span>
+                          Live Mission Pulse
+                        </p>
+                        <p className="text-sm font-bold text-cyan-400 italic bg-cyan-400/5 px-3 py-1 rounded-lg border border-cyan-400/20 w-fit">{c.lastLog || '等待指令...'}</p>
                       </div>
-                      <span className="text-2xl font-black font-mono text-white italic">{c.step || 0}%</span>
+                      <span className="text-3xl font-black font-mono text-white italic tracking-tighter">{c.step || 0}%</span>
                     </div>
                     <div className="h-4 bg-black rounded-full overflow-hidden border border-zinc-800 p-1">
                       <div 
-                        className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(6,182,212,0.5)]"
+                        className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 rounded-full transition-all duration-700 ease-out shadow-[0_0_15px_rgba(6,182,212,0.5)] relative overflow-hidden"
                         style={{ width: `${c.step || 0}%` }}
-                      ></div>
+                      >
+                        <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.2),transparent)] animate-[shimmer_2s_infinite]"></div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -241,14 +249,13 @@ const App: React.FC = () => {
           <h4 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.5em] mb-10">Intelligence Log</h4>
           <div className="space-y-3 font-mono text-[9px] flex-1 overflow-y-auto pr-4 scrollbar-thin">
             {globalLog.map((log, i) => (
-              <div key={i} className="p-4 bg-[#0a0a0a] border border-zinc-900 rounded-2xl text-zinc-400 border-l-2 border-l-cyan-500/30">{log}</div>
+              <div key={i} className="p-4 bg-[#0a0a0a] border border-zinc-900 rounded-2xl text-zinc-400 border-l-2 border-l-cyan-500/30 animate-fade-in">{log}</div>
             ))}
             {globalLog.length === 0 && <div className="text-zinc-800 italic">No mission logs available.</div>}
           </div>
         </aside>
       </div>
 
-      {/* Modals 保持不變，已優化 */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
           <div className="bg-[#0c0c0c] border border-zinc-800 w-full max-w-xl rounded-[4rem] p-16 space-y-10 shadow-2xl">
@@ -275,7 +282,7 @@ const App: React.FC = () => {
                 <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Cycle Strategy</label>
                 <div className="flex gap-3">
                   {['S','M','T','W','T','F','S'].map((d, i) => (
-                    <button key={i} onClick={() => toggleDay(i)} className={`flex-1 py-5 rounded-2xl font-black text-xs transition-all border ${newChan.schedule.activeDays.includes(i) ? 'bg-white text-black border-white shadow-lg' : 'bg-transparent text-zinc-600 border-zinc-800 hover:border-zinc-500'}`} > {d} </button>
+                    <button key={i} onClick={() => toggleDay(i)} className={`flex-1 py-5 rounded-2xl font-black text-xs transition-all border ${newChan.schedule.activeDays.includes(i) ? 'bg-white text-black border-white shadow-lg scale-105' : 'bg-transparent text-zinc-600 border-zinc-800 hover:border-zinc-500'}`} > {d} </button>
                   ))}
                 </div>
               </div>
@@ -298,7 +305,13 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-      <style>{`.onyx-card { background: linear-gradient(165deg, #0d0d0d 0%, #050505 100%); }`}</style>
+      <style>{`
+        .onyx-card { background: linear-gradient(165deg, #0d0d0d 0%, #050505 100%); }
+        @keyframes shimmer {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+      `}</style>
     </div>
   );
 };
