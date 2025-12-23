@@ -27,11 +27,15 @@ const App: React.FC = () => {
   const abortControllers = useRef<Record<string, AbortController>>({});
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const dbRef = useRef<any>(null);
+  
+  // 原子鎖：防止 checkSchedules 在同一時間重複執行
+  const isCheckingRef = useRef(false);
+  // 任務鎖：紀錄目前正在啟動中的頻道 ID，防止 Race Condition
+  const activeLaunchRef = useRef<Set<string>>(new Set());
 
   const [globalLog, setGlobalLog] = useState<string[]>([]);
   const addLog = (msg: string) => setGlobalLog(p => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...p].slice(0, 30));
 
-  // 新增頻道時的暫存狀態
   const [newChan, setNewChan] = useState({ 
     name: '', niche: 'AI 科技', language: 'zh-TW' as 'zh-TW' | 'en',
     autoDeploy: false,
@@ -41,20 +45,37 @@ const App: React.FC = () => {
     }
   });
 
+  // 1. 初始化 Firebase (僅用於數據同步與遠端觸發)
   useEffect(() => {
     try {
       const app = initializeApp(firebaseConfig);
       dbRef.current = getDatabase(app);
       setCloudStatus('connected');
       
-      const triggerRef = ref(dbRef.current, 'system/trigger_check');
-      onValue(triggerRef, () => {
-        if (isEngineActive) checkSchedules();
+      // 監聽遠端強制觸發訊號
+      const remoteTriggerRef = ref(dbRef.current, 'system/remote_trigger');
+      onValue(remoteTriggerRef, (snapshot) => {
+        const data = snapshot.val();
+        if (data && isEngineActive) {
+          addLog("📡 接收到遠端指令，執行手動掃描...");
+          checkSchedules();
+        }
       });
     } catch (e) {
       console.error("Firebase Init Failed", e);
     }
-  }, [isEngineActive, channels]);
+  }, [isEngineActive]);
+
+  // 2. 核心排程器：改用前端控制的 Interval (每 30 秒檢查一次)
+  useEffect(() => {
+    let timer: any;
+    if (isEngineActive) {
+      timer = setInterval(() => {
+        checkSchedules();
+      }, 30000); // 30 秒是一個安全的時間間隔
+    }
+    return () => clearInterval(timer);
+  }, [isEngineActive, channels, isAnyChannelRendering]);
 
   useEffect(() => {
     const saved = localStorage.getItem('pilot_onyx_v8_data');
@@ -70,7 +91,7 @@ const App: React.FC = () => {
     setIsEngineActive(newStatus);
     if (newStatus) {
       if (audioRef.current) audioRef.current.play().catch(() => {});
-      addLog("🚀 引擎點火：進入全自動排程監測模式");
+      addLog("🚀 引擎點火：自動排程模式已啟動 (30s 輪詢)");
     } else {
       if (audioRef.current) audioRef.current.pause();
       addLog("🛑 引擎停機");
@@ -78,33 +99,39 @@ const App: React.FC = () => {
   };
 
   const checkSchedules = () => {
-    if (isAnyChannelRendering) return;
+    // 如果正在檢查中或是已有頻道在渲染，直接跳過
+    if (isCheckingRef.current || isAnyChannelRendering) return;
+    
+    isCheckingRef.current = true;
 
     const now = new Date();
     const currentDay = now.getDay();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
-    channels.forEach(async (channel) => {
-      if (!channel.autoDeploy || !channel.weeklySchedule || channel.status === 'running') return;
+    try {
+      channels.forEach((channel) => {
+        if (!channel.autoDeploy || !channel.weeklySchedule || channel.status === 'running') return;
 
-      const isToday = channel.weeklySchedule.days.includes(currentDay);
-      const isCorrectTime = channel.weeklySchedule.times.includes(currentTime);
-      const slotId = `${currentDay}_${currentTime}`;
+        const isToday = channel.weeklySchedule.days.includes(currentDay);
+        const isCorrectTime = channel.weeklySchedule.times.includes(currentTime);
+        const slotId = `${currentDay}_${currentTime}`;
 
-      if (isToday && isCorrectTime && channel.lastTriggeredSlot !== slotId) {
-        addLog(`⏰ 排程觸發: ${channel.name} (${currentTime})`);
-        // 更新 lastTriggeredSlot 防止同一分鐘內重複執行
-        setChannels(prev => prev.map(c => c.id === channel.id ? { ...c, lastTriggeredSlot: slotId } : c));
-        await runPipeline(channel);
-      }
-    });
-
-    if (dbRef.current) {
-      set(ref(dbRef.current, 'system/last_pulse'), {
-        timestamp: serverTimestamp(),
-        active_channels: channels.length,
-        status: isAnyChannelRendering ? 'rendering' : 'pulsing'
+        // 雙重檢查：不在正在啟動名單中且 slot 不同
+        if (isToday && isCorrectTime && channel.lastTriggeredSlot !== slotId && !activeLaunchRef.current.has(channel.id)) {
+          addLog(`⏰ 時段匹配: ${channel.name} (${currentTime})`);
+          runPipeline(channel, slotId);
+        }
       });
+
+      // 只有在真的有需要更新時才寫回 Firebase，且換一個路徑寫入避免觸發 loop
+      if (dbRef.current && isEngineActive) {
+        set(ref(dbRef.current, 'system/heartbeat'), {
+          last_check: serverTimestamp(),
+          is_busy: isAnyChannelRendering
+        });
+      }
+    } finally {
+      isCheckingRef.current = false;
     }
   };
 
@@ -112,16 +139,21 @@ const App: React.FC = () => {
     if (abortControllers.current[id]) {
       abortControllers.current[id].abort();
       delete abortControllers.current[id];
+      activeLaunchRef.current.delete(id);
       addLog(`⚡ 手動中斷頻道任務: ${id}`);
       setChannels(p => p.map(c => c.id === id ? { ...c, status: 'idle', lastLog: '任務已手動取消', step: 0 } : c));
       setIsAnyChannelRendering(false);
     }
   };
 
-  const runPipeline = async (channel: ChannelConfig) => {
-    if (channel.status === 'running' || isAnyChannelRendering) return;
+  const runPipeline = async (channel: ChannelConfig, slotId?: string) => {
+    // 原子級檢查
+    if (channel.status === 'running' || isAnyChannelRendering || activeLaunchRef.current.has(channel.id)) return;
     
+    // 立即鎖定
+    activeLaunchRef.current.add(channel.id);
     setIsAnyChannelRendering(true);
+    
     const controller = new AbortController();
     abortControllers.current[channel.id] = controller;
 
@@ -129,7 +161,12 @@ const App: React.FC = () => {
       setChannels(p => p.map(c => c.id === channel.id ? { ...c, ...up } : c));
     };
 
-    update({ status: 'running', step: 10, lastLog: '趨勢掃描中...' });
+    update({ 
+      status: 'running', 
+      step: 10, 
+      lastLog: '趨勢掃描中...',
+      lastTriggeredSlot: slotId || channel.lastTriggeredSlot 
+    });
 
     try {
       const r1 = await fetch('/api/pipeline', {
@@ -153,11 +190,14 @@ const App: React.FC = () => {
       
       if (!d2.success) {
         if (d2.isQuotaError) {
-          addLog("⚠️ API 額度限制，等待重試...");
+          addLog("⚠️ API 額度限制，佇列等待重試...");
           update({ lastLog: 'API 429 限制，佇列等待中...', step: 30 });
           await new Promise(r => setTimeout(r, 65000));
+          
+          // 重試前釋放鎖
+          activeLaunchRef.current.delete(channel.id);
           setIsAnyChannelRendering(false);
-          return runPipeline(channel); 
+          return runPipeline(channel, slotId); 
         }
         throw new Error(d2.error);
       }
@@ -167,7 +207,7 @@ const App: React.FC = () => {
         lastLog: `發布成功: ${d2.videoId}`,
         lastRun: new Date().toISOString()
       });
-      addLog(`✅ ${channel.name} 任務圓滿達成`);
+      addLog(`✅ ${channel.name} 任務完成`);
     } catch (e: any) {
       if (e.name === 'AbortError') {
         update({ status: 'idle', lastLog: '任務已強制終止', step: 0 });
@@ -177,6 +217,7 @@ const App: React.FC = () => {
       }
     } finally {
       setIsAnyChannelRendering(false);
+      activeLaunchRef.current.delete(channel.id);
       delete abortControllers.current[channel.id];
     }
   };
@@ -254,6 +295,11 @@ const App: React.FC = () => {
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         <main className="flex-1 p-10 overflow-y-auto">
           <div className="max-w-4xl mx-auto space-y-6">
+            {channels.length === 0 && (
+              <div className="text-center py-20 border-2 border-dashed border-zinc-900 rounded-[3rem]">
+                <p className="text-zinc-600 font-black uppercase tracking-[0.3em] text-[10px]">No active cores found. Please initialize a channel.</p>
+              </div>
+            )}
             {channels.map(c => (
               <div key={c.id} className={`bg-zinc-950 border rounded-[2.5rem] p-8 transition-all ${c.status === 'running' ? 'border-cyan-500 ring-1 ring-cyan-500/20 shadow-[0_0_30px_rgba(6,182,212,0.1)]' : 'border-zinc-900'}`}>
                 <div className="flex justify-between items-center">
@@ -310,12 +356,12 @@ const App: React.FC = () => {
               <h4 className="text-[10px] font-black text-cyan-500 uppercase tracking-widest">Global Status</h4>
               <div className="space-y-3">
                 <div className="flex justify-between text-[11px] font-bold">
-                  <span className="text-zinc-600">API RPM Guard</span>
-                  <span className={isAnyChannelRendering ? 'text-yellow-500' : 'text-green-500'}>{isAnyChannelRendering ? 'BUSY' : 'READY'}</span>
+                  <span className="text-zinc-600">Engine Heartbeat</span>
+                  <span className={isEngineActive ? 'text-cyan-500' : 'text-zinc-800'}>{isEngineActive ? 'PULSING' : 'OFF'}</span>
                 </div>
                 <div className="flex justify-between text-[11px] font-bold">
-                  <span className="text-zinc-600">Active Channels</span>
-                  <span>{channels.length}</span>
+                  <span className="text-zinc-600">API RPM Guard</span>
+                  <span className={isAnyChannelRendering ? 'text-yellow-500' : 'text-green-500'}>{isAnyChannelRendering ? 'BUSY' : 'READY'}</span>
                 </div>
               </div>
             </div>
@@ -323,6 +369,7 @@ const App: React.FC = () => {
             <div className="space-y-4">
               <h3 className="text-[10px] font-black text-zinc-800 uppercase tracking-[0.4em] text-center italic">Subsystem Logs</h3>
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+                {globalLog.length === 0 && <p className="text-center text-zinc-800 text-[9px] uppercase font-black py-10">Waiting for events...</p>}
                 {globalLog.map((log, i) => (
                   <div key={i} className={`p-5 rounded-[1.5rem] border border-zinc-900 bg-zinc-950/50 text-[10px] font-bold leading-relaxed ${log.includes('✅') ? 'text-cyan-400 border-cyan-900/10' : log.includes('❌') ? 'text-red-400 border-red-900/10' : 'text-zinc-500'}`}>
                     {log}
