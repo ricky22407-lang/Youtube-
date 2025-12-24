@@ -106,7 +106,10 @@ export default async function handler(req: any, res: any) {
         const trends = await getTrends(channel.niche, channel.regionCode, API_KEY);
 
         const analysisParams = {
-          contents: `分析利基: ${channel.niche}。趨勢數據: ${JSON.stringify(trends)}。請產出 JSON：{ "prompt": "視覺描述", "title": "標題", "desc": "描述", "strategy_note": "策略說明" }。`,
+          contents: `目標利基: ${channel.niche}。趨勢數據: ${JSON.stringify(trends)}。
+          任務：請結合「全球短影音流量密碼」與「${channel.niche} 的核心靈魂」產出策略。
+          注意：不要過度追求反差而失去該利基原有的美感或特色。
+          請產出 JSON：{ "prompt": "視覺描述", "title": "標題", "desc": "描述", "strategy_note": "策略說明" }。`,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
@@ -160,7 +163,6 @@ export default async function handler(req: any, res: any) {
           console.log("Token expired, attempting refresh...");
           const refreshed = await refreshAccessToken(channel.auth.refresh_token);
           currentAccessToken = refreshed.access_token;
-          // 合併新舊 Token，保留原本的 refresh_token (Google 有時刷新不會回傳新的 refresh_token)
           newTokens = { ...channel.auth, ...refreshed };
         } else if (checkRes.status === 401) {
           throw new Error("授權過期且無法自動刷新，請重新點擊 LINK_YT 連結帳號。");
@@ -195,7 +197,7 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ 
           success: true, 
           videoId: uploadData.id,
-          updatedAuth: newTokens // 回傳給前端進行同步
+          updatedAuth: newTokens 
         });
       }
 
