@@ -11,7 +11,6 @@ function cleanJson(text: string): string {
   return text.replace(/```json/g, '').replace(/```/g, '').trim();
 }
 
-// 新增：刷新 Access Token 的工具
 async function refreshAccessToken(refreshToken: string) {
   const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
   const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -28,8 +27,8 @@ async function refreshAccessToken(refreshToken: string) {
   });
 
   const data = await response.json();
-  if (data.error) throw new Error(`刷新 Token 失敗: ${data.error_description || data.error}`);
-  return data; // 包含新 access_token
+  if (data.error) throw new Error(`Token Refresh Failed: ${data.error_description || data.error}`);
+  return data;
 }
 
 async function getTrends(niche: string, region: string, apiKey: string) {
@@ -91,42 +90,48 @@ export default async function handler(req: any, res: any) {
         let currentAccessToken = channel.auth?.access_token;
         let newTokens = null;
 
-        // 啟動影片渲染 (這部分通常耗時較長)
+        // 啟動影片渲染
         let operation = await ai.models.generateVideos({
           model: 'veo-3.1-fast-generate-preview',
           prompt: metadata.prompt,
           config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '9:16' }
         });
 
-        while (!operation.done) {
-          await new Promise(r => setTimeout(r, 15000));
+        let attempts = 0;
+        while (!operation.done && attempts < 40) {
+          await new Promise(r => setTimeout(r, 10000));
           operation = await ai.operations.getVideosOperation({ operation });
-          if ((operation as any).error) throw new Error(`Veo Error: ${(operation as any).error.message}`);
+          if ((operation as any).error) throw new Error(`Veo Rendering Failed: ${(operation as any).error.message}`);
+          attempts++;
         }
 
+        if (!operation.done) throw new Error("Video generation timed out.");
+
         const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (!downloadLink) throw new Error("Veo task completed but no video URI found.");
+
         const videoRes = await fetch(`${downloadLink}&key=${API_KEY}`);
+        if (!videoRes.ok) throw new Error(`Failed to download video file: ${videoRes.statusText}`);
         const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
 
-        // --- YouTube 上傳前的 Token 預檢與自動刷新 ---
+        // Token 預檢與自動刷新
         const checkRes = await fetch('https://www.googleapis.com/youtube/v3/channels?part=id&mine=true', {
           headers: { 'Authorization': `Bearer ${currentAccessToken}` }
         });
 
         if (checkRes.status === 401 && channel.auth?.refresh_token) {
-          console.log("Token expired, refreshing...");
           const refreshed = await refreshAccessToken(channel.auth.refresh_token);
           currentAccessToken = refreshed.access_token;
           newTokens = { ...channel.auth, ...refreshed };
         } else if (checkRes.status === 401) {
-          throw new Error("授權已過期且無法自動刷新，請重新連結 YouTube 頻道。");
+          throw new Error("Authentication expired. Please re-link YouTube channel.");
         }
 
         const boundary = '-------PIPELINE_ONYX_V8_UPLOAD_BOUNDARY';
         const multipartBody = Buffer.concat([
           Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({
-            snippet: { title: metadata.title, description: metadata.desc, categoryId: "22" },
-            status: { privacyStatus: "public" }
+            snippet: { title: metadata.title, description: metadata.desc + "\n\n#Shorts #AI", categoryId: "22" },
+            status: { privacyStatus: "public", selfDeclaredMadeForKids: false }
           })}\r\n`),
           Buffer.from(`--${boundary}\r\nContent-Type: video/mp4\r\n\r\n`),
           videoBuffer,
@@ -143,17 +148,18 @@ export default async function handler(req: any, res: any) {
         });
 
         const uploadData = await uploadRes.json();
-        if (uploadData.error) throw new Error(`YouTube 上傳失敗: ${uploadData.error.message}`);
+        if (uploadData.error) throw new Error(`YouTube Upload Error: ${uploadData.error.message}`);
 
         return res.status(200).json({ 
           success: true, 
           videoId: uploadData.id,
-          updatedAuth: newTokens // 回傳給前端保存
+          updatedAuth: newTokens
         });
       }
       default: return res.status(400).json({ error: 'Invalid Stage' });
     }
   } catch (e: any) {
+    console.error("[Pipeline API Error]:", e.message);
     return res.status(200).json({ success: false, error: e.message });
   }
 }
