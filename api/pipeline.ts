@@ -7,6 +7,28 @@ export const config = {
   api: { bodyParser: { sizeLimit: '15mb' } } 
 };
 
+// 輔助函式：嘗試使用高級模型，失敗則降級
+async function generateWithFallback(ai: any, params: any) {
+  const models = ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-flash-latest'];
+  let lastError = null;
+
+  for (const modelName of models) {
+    try {
+      console.log(`[Pipeline] Attempting analysis with: ${modelName}`);
+      const response = await ai.models.generateContent({
+        ...params,
+        model: modelName
+      });
+      return { text: response.text, modelUsed: modelName };
+    } catch (e: any) {
+      console.warn(`[Pipeline] Model ${modelName} failed, trying next...`);
+      lastError = e;
+      continue;
+    }
+  }
+  throw lastError || new Error("All models failed to respond.");
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
   
@@ -23,42 +45,45 @@ export default async function handler(req: any, res: any) {
         const lang = channel.language || 'zh-TW';
         const rawNiches = channel.niche || 'General Content';
         
-        const promptRes = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: `核心利基群組: ${rawNiches}. 
-          指定輸出語言: ${lang === 'zh-TW' ? '繁體中文 (Traditional Chinese)' : 'English (US)'}.
+        const analysisParams = {
+          contents: `核心利基: ${rawNiches}. 
+          語系: ${lang === 'zh-TW' ? '繁體中文' : 'English'}.
           
-          任務：進行深度市場分析並創作具備「高續看率」潛力的 Shorts 企劃。
+          任務：根據 YouTube 最新演算法趨勢進行「高存留率」企劃。
           
-          【1. 病毒式策略分析】：
-          - 找出該利基中最具「視覺爽感」或「情緒共鳴」的切入點。
-          - 設計一個「黃金 2 秒鉤子」：影片開頭必須有即時的視覺衝擊或強烈懸念。
+          【1. 敘事鉤子結構 (三段式設計)】：
+          - Hook (0-2s): 必須是極具衝擊力的開頭（例如：突發動作、懸念特寫）。
+          - Body: 核心內容展示。
+          - Loop: 結尾與開頭需能視覺無縫銜接。
           
-          【2. SEO 矩陣優化】：
-          - 標題需包含 1 個核心高流量關鍵字，並結合點擊誘餌（Clickbait）技巧。
-          - 描述需包含精準的 SEO 長尾詞，幫助演算法定位受眾。
+          【2. 正向攝影指令 (提升 Veo 良率)】：
+          - 避開 AI 感的方法：不要給負向指令。請使用攝影專業術語（如：8k cinematic, handheld motion, depth of field, anamorphic lens flares）。
           
-          【3. Veo 視覺指令規範】：
-          - 視覺描述需強調：強烈光影對比、動態構圖、特寫鏡頭。
-          - 嚴禁靜態、平淡的畫面。
+          【3. SEO 與點擊誘餌】：
+          - 標題：針對「演算法推薦」而非「搜尋」設計，強調好奇心與情緒。
           
-          【嚴格限制】：標題與敘述絕對禁止出現 #AI, #Bot, #ShortsPilot。
-          
-          請回傳 JSON：{ "prompt": "視覺衝擊指令", "title": "SEO 優化標題", "desc": "人性化敘述+SEO標籤" }`,
+          請回傳 JSON：{ "prompt": "三段式視覺指令", "title": "病毒標題", "desc": "SEO 描述", "strategy_note": "模型採用的策略簡述" }`,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                prompt: { type: Type.STRING, description: "給影片生成器的視覺描述，需包含黃金2秒的動作細節" },
-                title: { type: Type.STRING, description: "包含SEO關鍵字的病毒式標題" },
-                desc: { type: Type.STRING, description: "包含利基相關標籤與SEO描述內容" }
+                prompt: { type: Type.STRING },
+                title: { type: Type.STRING },
+                desc: { type: Type.STRING },
+                strategy_note: { type: Type.STRING }
               },
-              required: ["prompt", "title", "desc"]
+              required: ["prompt", "title", "desc", "strategy_note"]
             }
           }
+        };
+
+        const result = await generateWithFallback(ai, analysisParams);
+        return res.status(200).json({ 
+          success: true, 
+          metadata: JSON.parse(result.text || '{}'),
+          modelUsed: result.modelUsed 
         });
-        return res.status(200).json({ success: true, metadata: JSON.parse(promptRes.text || '{}') });
       }
 
       case 'render_and_upload': {
