@@ -1,15 +1,50 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { Buffer } from 'buffer';
-import { TrendSearcher } from '../modules/TrendSearcher';
 
 export const config = {
-  maxDuration: 300,
+  maxDuration: 300, // 增加到 5 分鐘上限
 };
 
-// 輔助函式：清理 AI 回傳的 JSON 字串
+// 輔助：清理 JSON 字串
 function cleanJson(text: string): string {
+  if (!text) return '{}';
   return text.replace(/```json/g, '').replace(/```/g, '').trim();
+}
+
+// 輕量化 YouTube 搜尋工具
+async function getTrends(niche: string, region: string, apiKey: string) {
+  const fetchTrack = async (q: string) => {
+    try {
+      const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoDuration=short&maxResults=5&order=viewCount&key=${apiKey}&regionCode=${region || 'TW'}`;
+      const res = await fetch(searchUrl);
+      const data = await res.json();
+      
+      if (data.error) return [];
+      
+      const videoIds = (data.items || []).map((i: any) => i.id.videoId).join(',');
+      if (!videoIds) return [];
+
+      const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoIds}&key=${apiKey}`;
+      const statsRes = await fetch(statsUrl);
+      const statsData = await statsRes.json();
+
+      return (statsData.items || []).map((v: any) => ({
+        title: v.snippet.title,
+        view_count: parseInt(v.statistics.viewCount || '0', 10),
+        tags: v.snippet.tags || []
+      }));
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const [nicheTrends, globalTrends] = await Promise.all([
+    fetchTrack(`#shorts ${niche}`),
+    fetchTrack(`#shorts trending`)
+  ]);
+
+  return { nicheTrends, globalTrends };
 }
 
 async function generateWithFallback(ai: any, params: any) {
@@ -32,29 +67,41 @@ async function generateWithFallback(ai: any, params: any) {
 }
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') return res.status(405).json({ success: false, error: 'Method Not Allowed' });
-  
-  const API_KEY = process.env.API_KEY;
-  if (!API_KEY) return res.status(200).json({ success: false, error: 'System API_KEY Missing' });
-
-  const { stage, channel, metadata } = req.body;
-  const ai = new GoogleGenAI({ apiKey: API_KEY });
-
+  // 強制最外層 JSON 包裝，防止 HTML 錯誤回傳
   try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ success: false, error: 'Method Not Allowed' });
+    }
+    
+    const API_KEY = process.env.API_KEY;
+    if (!API_KEY) {
+      return res.status(200).json({ success: false, error: 'System API_KEY Missing' });
+    }
+
+    const { stage, channel, metadata } = req.body;
+    const ai = new GoogleGenAI({ apiKey: API_KEY });
+
     switch (stage) {
       case 'analyze': {
-        const searcher = new TrendSearcher();
-        const trends = await searcher.execute(channel);
+        // 自動執行雙軌搜尋
+        const trends = await getTrends(channel.niche, channel.regionCode, API_KEY);
 
         const analysisParams = {
           contents: `
-          利基領域: ${channel.niche}.
-          語系: ${channel.language === 'en' ? 'English' : '繁體中文'}.
+          【角色】：頂尖 YouTube 演算法分析師
+          【目標】：將「全域病毒節奏」嫁接到「垂直利基內容」中。
           
-          垂直利基趨勢: ${JSON.stringify(trends.nicheTrends)}
-          全域病毒趨勢: ${JSON.stringify(trends.globalTrends)}
+          【數據輸入】：
+          1. 垂直利基 (同業): ${JSON.stringify(trends.nicheTrends)}
+          2. 全域病毒 (演算法最愛): ${JSON.stringify(trends.globalTrends)}
           
-          任務：請分析趨勢並結合視覺策略。請回傳 JSON 格式。`,
+          【頻道設定】：
+          利基: ${channel.niche}
+          語系: ${channel.language === 'en' ? 'English' : '繁體中文'}
+          
+          【任務】：
+          分析數據後，產出一個具備「病毒式鉤子」的視覺提示詞、標題與描述。
+          請回傳純 JSON。`,
           config: {
             responseMimeType: "application/json",
             responseSchema: {
@@ -72,17 +119,19 @@ export default async function handler(req: any, res: any) {
 
         const result = await generateWithFallback(ai, analysisParams);
         const cleanedText = cleanJson(result.text || '{}');
+        const parsed = JSON.parse(cleanedText);
         
         return res.status(200).json({ 
           success: true, 
-          metadata: JSON.parse(cleanedText),
+          metadata: parsed,
           modelUsed: result.modelUsed 
         });
       }
 
       case 'render_and_upload': {
-        if (!channel.auth?.access_token) throw new Error("YouTube Auth Lost.");
+        if (!channel.auth?.access_token) throw new Error("YouTube 授權無效，請重新連結。");
 
+        // 渲染影片
         let operation = await ai.models.generateVideos({
           model: 'veo-3.1-fast-generate-preview',
           prompt: metadata.prompt,
@@ -90,19 +139,26 @@ export default async function handler(req: any, res: any) {
         });
 
         let attempts = 0;
-        while (!operation.done && attempts < 30) {
-          await new Promise(r => setTimeout(r, 20000));
+        while (!operation.done && attempts < 40) {
+          await new Promise(r => setTimeout(r, 15000));
           operation = await ai.operations.getVideosOperation({ operation });
           attempts++;
         }
+
+        if (!operation.done) throw new Error("影片渲染逾時 (Veo Task Timeout)");
 
         const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
         const videoRes = await fetch(`${downloadLink}&key=${API_KEY}`);
         const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
         
+        // YouTube Multipart Upload
         const boundary = '-------PIPELINE_ONYX_V8_UPLOAD_BOUNDARY';
         const jsonMetadata = JSON.stringify({
-          snippet: { title: metadata.title, description: metadata.desc, categoryId: "22" },
+          snippet: { 
+            title: metadata.title, 
+            description: metadata.desc + "\n\n#Shorts #AI",
+            categoryId: "22" 
+          },
           status: { privacyStatus: "public", selfDeclaredMadeForKids: false }
         });
         
@@ -124,6 +180,7 @@ export default async function handler(req: any, res: any) {
 
         const uploadData = await uploadRes.json();
         if (uploadData.error) throw new Error(uploadData.error.message);
+        
         return res.status(200).json({ success: true, videoId: uploadData.id });
       }
 
@@ -131,7 +188,12 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ success: false, error: 'Invalid Stage' });
     }
   } catch (e: any) {
-    console.error("[API Handler Error]:", e.message);
-    return res.status(200).json({ success: false, error: e.message });
+    console.error("[Fatal API Error]:", e.message);
+    // 即使發生最嚴重的崩潰，也回傳 JSON
+    return res.status(200).json({ 
+      success: false, 
+      error: `伺服器處理失敗: ${e.message}`,
+      stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
+    });
   }
 }
